@@ -160,7 +160,10 @@ def main() -> int:
     for path in sources:
         raw = path.read_text(encoding="utf-8")
         code = strip_noise(IMPORT_RE.sub("", raw))
-        rel = str(path.relative_to(ROOT))
+        # as_posix(): CONFIRMED_FALSE_POSITIVES is keyed with forward slashes,
+        # and relative_to() otherwise returns backslashes on Windows, which
+        # would silently stop the waiver below from matching.
+        rel = path.relative_to(ROOT).as_posix()
         findings = local_var_risks(code) + missing_return_types(code)
         for target, message in unawaited_risks(code):
             reason = CONFIRMED_FALSE_POSITIVES.get((rel, target))

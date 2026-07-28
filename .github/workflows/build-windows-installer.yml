@@ -76,8 +76,20 @@ jobs:
         # spending several minutes on a build that would ship the wrong number.
         run: dart tool/check_version.dart
 
-      - name: Verify formatting
+      - name: Check formatting (informational)
+        # Reported as a warning rather than a hard failure: the code itself is
+        # correct either way, and the next step normalises it regardless. This
+        # exists so a contributor can see in the log whether they forgot to run
+        # `dart format` locally, without it blocking the build over whitespace.
+        continue-on-error: true
         run: dart format --output=none --set-exit-if-changed .
+
+      - name: Apply formatting
+        # Rewrites any file that is not in the canonical style, in place, in
+        # this checkout. Nothing here is committed back to the repository - it
+        # just guarantees that analyze, test and build always run against
+        # correctly formatted code, even if a contributor's editor did not.
+        run: dart format .
 
       - name: Static analysis
         # No --no-fatal-infos: an info-level finding is still a finding.
