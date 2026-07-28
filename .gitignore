@@ -1,0 +1,28 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+pubspec.lock
+*.iml
+.idea/
+.vscode/
+
+# Generated platform scaffolding. Recreated by `flutter create --platforms=...`.
+# See "The windows/ directory" in README.md.
+/windows/
+/android/
+/ios/
+/linux/
+/macos/
+/web/
+
+# Installer output
+installer/Output/
+installer/build/
+*.exe
+
+# OS noise
+Thumbs.db
+.DS_Store
