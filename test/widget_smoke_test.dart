@@ -6,6 +6,7 @@ import 'package:opencue/data/library_service.dart';
 import 'package:opencue/data/repositories/sqlite_repositories.dart';
 import 'package:opencue/domain/enums/enums.dart';
 import 'package:opencue/domain/models/opener_line.dart';
+import 'package:opencue/features/library/library_screen.dart';
 import 'package:opencue/features/shared/app_scope.dart';
 import 'package:opencue/l10n/strings_en.dart';
 
@@ -261,11 +262,11 @@ void main() {
       await tapLabel(tester, stringsEn['location.cafe']!);
 
       // Switch on "appears to be working", one of the five hard conditions.
+      // tapFinder scrolls it into view, so no explicit scroll is needed.
       final workingSwitch = find.ancestor(
         of: find.text(stringsEn['context.isWorking']!),
         matching: find.byType(SwitchListTile),
       );
-      await tester.scrollUntilVisible(workingSwitch, 200);
       await tapFinder(tester, workingSwitch);
 
       await tapLabel(tester, stringsEn['context.showSuggestions']!);
@@ -306,8 +307,10 @@ void main() {
       expect(state.lineById('bar-line')?.positiveResults, 1);
 
       // And it survives a reload from storage, which is what "persists after
-      // restart" comes down to.
-      await state.reload();
+      // restart" comes down to. runAsync because this is a real database read
+      // awaited directly, not through pumpAndSettle.
+      await tester.runAsync(state.reload);
+      await settle(tester);
       expect(state.history, hasLength(1));
     });
   });
@@ -352,7 +355,16 @@ void main() {
       );
 
       await tapLabel(tester, stringsEn['home.browseLibrary']!);
-      await tapFinder(tester, find.byIcon(Icons.star_outline).first);
+      // Scoped to the row: Icons.star_outline is also the Favourites
+      // navigation destination's icon, and an unscoped finder tapped the rail
+      // (switching tabs) instead of favouriting the line.
+      await tapFinder(
+        tester,
+        find.descendant(
+          of: find.byType(LibraryRow),
+          matching: find.byIcon(Icons.star_outline),
+        ),
+      );
 
       expect(state.lineById('a')?.isFavorite, isTrue);
     });

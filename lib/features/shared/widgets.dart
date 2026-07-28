@@ -364,6 +364,7 @@ class LineText extends StatelessWidget {
     required this.line,
     this.japaneseStyle,
     this.showEnglish = true,
+    this.selectable = true,
     super.key,
   });
 
@@ -371,19 +372,29 @@ class LineText extends StatelessWidget {
   final TextStyle? japaneseStyle;
   final bool showEnglish;
 
+  /// Whether the Japanese can be selected and copied.
+  ///
+  /// True where the line is the subject of the screen — the recommendation
+  /// card, the detail screen — because copying the text you are about to say
+  /// is genuinely useful. False inside a tappable row: SelectableText installs
+  /// its own gesture recognisers and wins over an enclosing InkWell, so a tap
+  /// on the text would start selecting it instead of opening the row.
+  final bool selectable;
+
   @override
   Widget build(BuildContext context) {
     final strings = AppScope.strings(context);
     final english = line.englishMeaning;
     final wantsEnglish =
         showEnglish && strings.showEnglishMeaning && english != null;
+    final style = japaneseStyle ?? AppTheme.japaneseBody(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        SelectableText(
-          line.japaneseText,
-          style: japaneseStyle ?? AppTheme.japaneseBody(context),
-        ),
+        if (selectable)
+          SelectableText(line.japaneseText, style: style)
+        else
+          Text(line.japaneseText, style: style),
         if (wantsEnglish) ...<Widget>[
           const SizedBox(height: 6),
           Text(english, style: AppTheme.englishMeaning(context)),

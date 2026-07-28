@@ -410,7 +410,9 @@ class LibraryRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  LineText(line: line),
+                  // Not selectable: the whole row is tappable, and
+                  // SelectableText would swallow the tap.
+                  LineText(line: line, selectable: false),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 6,
