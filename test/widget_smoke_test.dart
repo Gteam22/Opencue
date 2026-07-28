@@ -25,12 +25,37 @@ void main() {
   /// fails with a ten-minute timeout instead of the few milliseconds the work
   /// actually takes. `tester.runAsync` steps outside that simulated zone for
   /// exactly the calls that need real time to pass.
+  ///
+  /// Several rounds, rather than one: a single user action often chains real
+  /// isolate work — write, then re-read, then notifyListeners, then rebuild —
+  /// and each link needs a turn of real time before the next one starts. One
+  /// round left assertions racing against a write that had not landed yet.
   Future<void> settle(WidgetTester tester) async {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 60)),
-    );
-    await tester.pumpAndSettle();
+    for (var round = 0; round < 4; round++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 40)),
+      );
+      await tester.pumpAndSettle();
+    }
   }
+
+  /// Taps a widget, scrolling it into view first.
+  ///
+  /// Several screens are long scrolling forms, and a target below the fold
+  /// gets a silent "hit test missed" warning rather than a failure — the tap
+  /// simply does nothing and the test fails later on a confusing assertion
+  /// about the *next* screen. ensureVisible removes that whole class of
+  /// false failure.
+  Future<void> tapFinder(WidgetTester tester, Finder finder) async {
+    await tester.ensureVisible(finder);
+    await tester.pumpAndSettle();
+    await tester.tap(finder);
+    await settle(tester);
+  }
+
+  /// Taps a widget by its visible label. See [tapFinder].
+  Future<void> tapLabel(WidgetTester tester, String label) =>
+      tapFinder(tester, find.text(label).first);
 
   /// Builds a live app over an in-memory database.
   ///
@@ -155,8 +180,7 @@ void main() {
         ],
       );
 
-      await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.browseLibrary']!);
 
       expect(find.text('ライブラリの一言です。'), findsOneWidget);
     });
@@ -172,13 +196,13 @@ void main() {
 
       // 'Favourites' is also a navigation destination label, so this scopes
       // the tap to the shortcut button on the home screen itself.
-      await tester.tap(
+      await tapFinder(
+        tester,
         find.descendant(
           of: find.byType(OutlinedButton),
           matching: find.text(stringsEn['home.favorites']!),
         ),
       );
-      await settle(tester);
 
       expect(find.text('お気に入りの一言。'), findsOneWidget);
       expect(find.text('ふつうの一言。'), findsNothing);
@@ -187,12 +211,10 @@ void main() {
     testWidgets('reaches settings and the privacy screen', (tester) async {
       await pumpApp(tester, preload: <OpenerLine>[line('a')]);
 
-      await tester.tap(find.text(stringsEn['nav.settings']!).last);
-      await settle(tester);
+      await tapFinder(tester, find.text(stringsEn['nav.settings']!).last);
       expect(find.text(stringsEn['settings.language']!), findsOneWidget);
 
-      await tester.tap(find.text(stringsEn['settings.about']!).last);
-      await settle(tester);
+      await tapFinder(tester, find.text(stringsEn['settings.about']!).last);
       expect(find.text(stringsEn['about.privacyNoCamera']!), findsOneWidget);
     });
   });
@@ -210,15 +232,12 @@ void main() {
         ],
       );
 
-      await tester.tap(find.text(stringsEn['home.findLine']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.findLine']!);
       expect(find.text(stringsEn['context.title']!), findsOneWidget);
 
-      await tester.tap(find.text(stringsEn['location.bar']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['location.bar']!);
 
-      await tester.tap(find.text(stringsEn['context.showSuggestions']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['context.showSuggestions']!);
 
       expect(find.text('ここ、いい雰囲気ですね。'), findsOneWidget);
       expect(find.text(stringsEn['rec.category.safest']!), findsOneWidget);
@@ -238,10 +257,8 @@ void main() {
         ],
       );
 
-      await tester.tap(find.text(stringsEn['home.findLine']!));
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['location.cafe']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.findLine']!);
+      await tapLabel(tester, stringsEn['location.cafe']!);
 
       // Switch on "appears to be working", one of the five hard conditions.
       final workingSwitch = find.ancestor(
@@ -249,15 +266,9 @@ void main() {
         matching: find.byType(SwitchListTile),
       );
       await tester.scrollUntilVisible(workingSwitch, 200);
-      await tester.tap(workingSwitch);
-      await settle(tester);
+      await tapFinder(tester, workingSwitch);
 
-      await tester.scrollUntilVisible(
-        find.text(stringsEn['context.showSuggestions']!),
-        200,
-      );
-      await tester.tap(find.text(stringsEn['context.showSuggestions']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['context.showSuggestions']!);
 
       expect(find.text(stringsEn['advisory.title']!), findsOneWidget);
       // The specific triggering condition must be named, not just the warning.
@@ -281,20 +292,14 @@ void main() {
         ],
       );
 
-      await tester.tap(find.text(stringsEn['home.findLine']!));
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['location.bar']!));
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['context.showSuggestions']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.findLine']!);
+      await tapLabel(tester, stringsEn['location.bar']!);
+      await tapLabel(tester, stringsEn['context.showSuggestions']!);
 
-      await tester.tap(find.text(stringsEn['action.usedThisLine']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['action.usedThisLine']!);
 
-      await tester.tap(find.text(stringsEn['outcome.positive']!));
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['action.save']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['outcome.positive']!);
+      await tapLabel(tester, stringsEn['action.save']!);
 
       expect(state.history, hasLength(1));
       expect(state.history.single.outcome, InteractionOutcome.positive);
@@ -312,18 +317,15 @@ void main() {
         (tester) async {
       final state = await pumpApp(tester, preload: <OpenerLine>[line('a')]);
 
-      await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['action.addLine']!).first);
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.browseLibrary']!);
+      await tapFinder(tester, find.text(stringsEn['action.addLine']!).first);
 
       await tester.enterText(
         find.byType(TextFormField).first,
         '書いてみた一言です。',
       );
       await settle(tester);
-      await tester.tap(find.text(stringsEn['action.save']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['action.save']!);
 
       expect(state.lineCount, 2);
       expect(find.text('書いてみた一言です。'), findsOneWidget);
@@ -332,12 +334,9 @@ void main() {
     testWidgets('a line with no Japanese text is refused', (tester) async {
       final state = await pumpApp(tester, preload: <OpenerLine>[line('a')]);
 
-      await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['action.addLine']!).first);
-      await settle(tester);
-      await tester.tap(find.text(stringsEn['action.save']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.browseLibrary']!);
+      await tapFinder(tester, find.text(stringsEn['action.addLine']!).first);
+      await tapLabel(tester, stringsEn['action.save']!);
 
       expect(state.lineCount, 1);
       expect(
@@ -352,10 +351,8 @@ void main() {
         preload: <OpenerLine>[line('a', japanese: '星をつける一言。')],
       );
 
-      await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await settle(tester);
-      await tester.tap(find.byIcon(Icons.star_outline).first);
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.browseLibrary']!);
+      await tapFinder(tester, find.byIcon(Icons.star_outline).first);
 
       expect(state.lineById('a')?.isFavorite, isTrue);
     });
@@ -366,16 +363,12 @@ void main() {
         preload: <OpenerLine>[line('a', japanese: '消される一言。')],
       );
 
-      await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await settle(tester);
-      await tester.tap(find.text('消される一言。'));
-      await settle(tester);
-      await tester.tap(find.byIcon(Icons.delete_outline));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.browseLibrary']!);
+      await tapFinder(tester, find.text('消される一言。'));
+      await tapFinder(tester, find.byIcon(Icons.delete_outline));
 
       expect(find.text(stringsEn['library.deleteTitle']!), findsOneWidget);
-      await tester.tap(find.text(stringsEn['action.cancel']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['action.cancel']!);
 
       expect(state.lineCount, 1);
     });
@@ -391,8 +384,7 @@ void main() {
         ],
       );
 
-      await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await settle(tester);
+      await tapLabel(tester, stringsEn['home.browseLibrary']!);
       await tester.enterText(find.byType(TextField).first, '海');
       await settle(tester);
 

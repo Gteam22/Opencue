@@ -548,4 +548,105 @@ void main() {
       expect(keys.length, rows.length);
     });
   });
+
+  group('in-memory filtering matches SQL filtering', () {
+    // The library screen filters LibraryQuery in memory (LibraryQuery.applyTo)
+    // while the repository builds SQL for the same query object. Two
+    // implementations of one behaviour will drift unless something pins them
+    // together, so every case below is run through both and compared.
+    Future<TestStack> seeded() async {
+      final stack = await TestStack.create();
+      await stack.service.lines.insertMany(<OpenerLine>[
+        line(
+          'bar-playful',
+          japanese: 'それ、何飲んでるんですか？',
+          english: 'What are you drinking?',
+          category: LineCategory.bar,
+          locations: <LocationTag>{LocationTag.bar},
+          cues: <ObservableCue>{ObservableCue.drink},
+          tones: <Tone>{Tone.playful},
+          directness: 2,
+        ),
+        line(
+          'cafe-safe',
+          japanese: 'ここ、雰囲気いいですよね。',
+          english: 'This place has a nice atmosphere.',
+          category: LineCategory.cafe,
+          locations: <LocationTag>{LocationTag.cafe},
+          tones: <Tone>{Tone.safe},
+          directness: 1,
+          isFavorite: true,
+        ),
+        line(
+          'direct-street',
+          japanese: '率直に言うと、すごくタイプです。',
+          english: 'Honestly, you are very much my type.',
+          category: LineCategory.streetOrShopping,
+          locations: <LocationTag>{LocationTag.street},
+          cues: <ObservableCue>{ObservableCue.distinctiveOutfit},
+          tones: <Tone>{Tone.direct},
+          directness: 5,
+          isUserCreated: false,
+        ),
+      ]);
+      return stack;
+    }
+
+    const cases = <String, LibraryQuery>{
+      'no filters': LibraryQuery(),
+      'japanese text': LibraryQuery(searchText: '雰囲気'),
+      'english text, mixed case': LibraryQuery(searchText: 'DRINKING'),
+      'no match': LibraryQuery(searchText: 'zzzzz'),
+      'location': LibraryQuery(locations: <LocationTag>{LocationTag.cafe}),
+      'cue': LibraryQuery(cues: <ObservableCue>{ObservableCue.drink}),
+      'tone': LibraryQuery(tones: <Tone>{Tone.direct}),
+      'category': LibraryQuery(categories: <LineCategory>{LineCategory.bar}),
+      'favourites': LibraryQuery(favoritesOnly: true),
+      'user created': LibraryQuery(userCreatedOnly: true),
+      'directness range': LibraryQuery(minDirectness: 2, maxDirectness: 4),
+      'conjunctive': LibraryQuery(
+        locations: <LocationTag>{LocationTag.bar},
+        tones: <Tone>{Tone.safe},
+      ),
+    };
+
+    cases.forEach((name, query) {
+      test('agree on: $name', () async {
+        final stack = await seeded();
+        addTearDown(stack.dispose);
+        final all = await stack.service.lines.getAll();
+
+        final fromSql = await stack.service.lines.query(query);
+        final fromMemory = query.applyTo(all);
+
+        expect(
+          fromMemory.map((l) => l.id).toSet(),
+          fromSql.map((l) => l.id).toSet(),
+          reason: 'in-memory and SQL disagree for "$name"',
+        );
+      });
+    });
+
+    for (final sort in LibrarySort.values) {
+      test('agree on sort order: ${sort.name}', () async {
+        final stack = await seeded();
+        addTearDown(stack.dispose);
+        await stack.service.lines.recordOutcome(
+          'bar-playful',
+          InteractionOutcome.positive,
+        );
+        final all = await stack.service.lines.getAll();
+        final query = LibraryQuery(sort: sort);
+
+        final fromSql = await stack.service.lines.query(query);
+        final fromMemory = query.applyTo(all);
+
+        expect(
+          fromMemory.map((l) => l.id).toList(),
+          fromSql.map((l) => l.id).toList(),
+          reason: 'ordering differs for ${sort.name}',
+        );
+      });
+    }
+  });
 }

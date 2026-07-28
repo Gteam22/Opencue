@@ -23,9 +23,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   late LibraryQuery _query;
   final TextEditingController _search = TextEditingController();
-  List<OpenerLine> _results = const <OpenerLine>[];
   bool _filtersOpen = false;
-  bool _isBusy = false;
 
   @override
   void initState() {
@@ -42,42 +40,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Re-runs whenever AppState notifies, so an edit elsewhere is reflected.
-    _refresh();
-  }
-
-  @override
   void dispose() {
     _search.dispose();
     super.dispose();
   }
 
-  Future<void> _refresh() async {
-    if (_isBusy) return;
-    _isBusy = true;
-    final state = AppScope.read(context);
-    final results = await state.service.lines.query(_query);
-    if (!mounted) {
-      _isBusy = false;
-      return;
-    }
-    setState(() {
-      _results = results;
-      _isBusy = false;
-    });
-  }
-
-  void _apply(LibraryQuery next) {
-    setState(() => _query = next);
-    _refresh();
-  }
+  void _apply(LibraryQuery next) => setState(() => _query = next);
 
   @override
   Widget build(BuildContext context) {
     // Subscribe so the list refreshes after a save or delete anywhere.
-    AppScope.of(context);
+    final state = AppScope.of(context);
+    // Filtered from the in-memory library rather than re-queried from SQLite.
+    // AppState already holds every line, the library is only a few hundred
+    // rows, and doing it here keeps the list synchronous — a database round
+    // trip per keystroke made search feel laggy and left the list empty on
+    // the first frame.
+    final results = _query.applyTo(state.lines);
     final strings = AppScope.strings(context);
 
     return Column(
@@ -103,15 +82,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         const Divider(height: 1),
         Expanded(
-          child: _results.isEmpty
+          child: results.isEmpty
               ? _emptyState(strings.t('library.empty'))
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: _results.length,
+                  itemCount: results.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, index) => LibraryRow(
-                    line: _results[index],
-                    onOpen: () => _openDetail(_results[index]),
+                    line: results[index],
+                    onOpen: () => _openDetail(results[index]),
                   ),
                 ),
         ),
@@ -156,7 +135,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         builder: (_) => LineDetailScreen(lineId: line.id),
       ),
     );
-    await _refresh();
+    // No explicit refresh: AppState notifies after every write, which rebuilds
+    // this screen and re-filters from the in-memory library.
   }
 
   Future<void> _openEditor(OpenerLine? line) async {
@@ -165,7 +145,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
         builder: (_) => LineEditorScreen(existing: line),
       ),
     );
-    await _refresh();
   }
 }
 

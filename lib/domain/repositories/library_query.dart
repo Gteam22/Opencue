@@ -1,4 +1,5 @@
 import '../enums/enums.dart';
+import '../models/opener_line.dart';
 
 /// The set of filters and the sort order applied on the library screen.
 ///
@@ -55,6 +56,70 @@ class LibraryQuery {
     if (favoritesOnly) count++;
     if (userCreatedOnly) count++;
     return count;
+  }
+
+  /// Whether [line] satisfies every active filter.
+  ///
+  /// This is the in-memory counterpart to the SQL that
+  /// SqliteOpenerLineRepository.query builds, and the two must agree.
+  /// `applyTo` below is what the library screen uses: AppState already holds
+  /// the whole library in memory, so filtering there avoids a database round
+  /// trip on every keystroke.
+  bool matches(OpenerLine line) {
+    final needle = searchText.trim().toLowerCase();
+    if (needle.isNotEmpty) {
+      final japanese = line.japaneseText.toLowerCase();
+      final english = line.englishMeaning?.toLowerCase() ?? '';
+      if (!japanese.contains(needle) && !english.contains(needle)) {
+        return false;
+      }
+    }
+    if (favoritesOnly && !line.isFavorite) return false;
+    if (userCreatedOnly && !line.isUserCreated) return false;
+    if (line.directness < minDirectness) return false;
+    if (line.directness > maxDirectness) return false;
+    if (categories.isNotEmpty && !categories.contains(line.category)) {
+      return false;
+    }
+    if (locations.isNotEmpty &&
+        line.locations.intersection(locations).isEmpty) {
+      return false;
+    }
+    if (cues.isNotEmpty &&
+        line.observableCues.intersection(cues).isEmpty) {
+      return false;
+    }
+    if (tones.isNotEmpty && line.tones.intersection(tones).isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Filters and sorts [lines] according to this query.
+  List<OpenerLine> applyTo(Iterable<OpenerLine> lines) {
+    final results = lines.where(matches).toList();
+    switch (sort) {
+      case LibrarySort.recentlyAdded:
+        results.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      case LibrarySort.mostUsed:
+        results.sort((a, b) => b.timesUsed.compareTo(a.timesUsed));
+      case LibrarySort.highestPositiveHistory:
+        // Lines without enough recorded history sort last rather than being
+        // flattered by a tiny sample, matching the SQL ordering.
+        results.sort((a, b) {
+          final aSignal = a.personalSignal;
+          final bSignal = b.personalSignal;
+          if (aSignal == null && bSignal == null) {
+            return b.timesUsed.compareTo(a.timesUsed);
+          }
+          if (aSignal == null) return 1;
+          if (bSignal == null) return -1;
+          return bSignal.compareTo(aSignal);
+        });
+      case LibrarySort.alphabetical:
+        results.sort((a, b) => a.japaneseText.compareTo(b.japaneseText));
+    }
+    return results;
   }
 
   LibraryQuery copyWith({
