@@ -14,19 +14,29 @@ import 'helpers.dart';
 void main() {
   setUpAll(AppDatabase.initialiseFfi);
 
+  /// Drop-in replacement for `tester.pumpAndSettle()` after an action that
+  /// touches the database (a tap that saves, deletes, favourites, records an
+  /// outcome, and so on).
+  ///
+  /// sqflite_common_ffi runs every database operation on a background isolate.
+  /// flutter_test's default zone only understands Dart's simulated Timers and
+  /// microtasks, not a reply arriving from a real isolate, so a plain
+  /// `pumpAndSettle()` waiting on that work never completes; it eventually
+  /// fails with a ten-minute timeout instead of the few milliseconds the work
+  /// actually takes. `tester.runAsync` steps outside that simulated zone for
+  /// exactly the calls that need real time to pass.
+  Future<void> settle(WidgetTester tester) async {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 60)),
+    );
+    await tester.pumpAndSettle();
+  }
+
   /// Builds a live app over an in-memory database.
   ///
   /// Nothing is stubbed: the widgets talk to the real repositories and the real
   /// recommendation engine, so this exercises the actual wiring rather than a
   /// parallel test-only assembly.
-  ///
-  /// sqflite_common_ffi runs every database operation on a background isolate.
-  /// flutter_test's default zone only understands Dart's simulated Timers and
-  /// microtasks, not a reply arriving from a real isolate, so a plain `await`
-  /// on that work — or a plain `pumpAndSettle()` waiting on it — never
-  /// completes; it eventually fails with a ten-minute timeout instead of the
-  /// few milliseconds the work actually takes. `tester.runAsync` steps outside
-  /// that simulated zone for exactly the calls that need real time to pass.
   Future<AppState> pumpApp(
     WidgetTester tester, {
     List<OpenerLine> preload = const <OpenerLine>[],
@@ -73,17 +83,6 @@ void main() {
     );
     await settle(tester);
     return state;
-  }
-
-  /// Drop-in replacement for `tester.pumpAndSettle()` after an action that
-  /// touches the database (a tap that saves, deletes, favourites, records an
-  /// outcome, and so on). See the comment on [pumpApp] for why the plain
-  /// version hangs instead of completing.
-  Future<void> settle(WidgetTester tester) async {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 60)),
-    );
-    await tester.pumpAndSettle();
   }
 
   group('startup', () {

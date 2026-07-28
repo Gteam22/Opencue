@@ -33,7 +33,11 @@ CONFIRMED_FALSE_POSITIVES = {
 }
 
 sys.path.insert(0, str(ROOT / "tool"))
-from check_dart_symbols import IMPORT_RE, strip_noise  # noqa: E402
+from check_dart_symbols import (  # noqa: E402
+    IMPORT_RE,
+    NOT_DECLARATIONS,
+    strip_noise,
+)
 
 # `var x = ...` outside a for-header. Reported only when x is never assigned
 # again in the enclosing file, which is a safe over-approximation of scope.
@@ -150,6 +154,55 @@ def unawaited_risks(code: str) -> list[str]:
     return findings
 
 
+def local_function_order_risks(code: str) -> list[str]:
+    """Local functions declared inside a block, called before their own
+    declaration line.
+
+    Unlike top-level functions, Dart's local function declarations do not
+    hoist across each other: a local function can only call a sibling local
+    function that was declared textually earlier in the same block. This is
+    easy to get backwards when refactoring test helpers, and `flutter analyze`
+    is the only thing that has ever actually caught it here.
+    """
+    # `ReturnType name(` or `ReturnType name<T>(` at 2-space (block-local)
+    # indentation, immediately followed by a parameter list and `{` or `=>` —
+    # distinguishes a declaration from a call by requiring a type-shaped token
+    # before the name.
+    decl_re = re.compile(
+        r"^  (?:[\w<>,?\[\]]+\s+)+([a-zA-Z_$][\w$]*)\s*(?:<[^>\n]*>)?\s*\(",
+        re.MULTILINE,
+    )
+    declared_at: dict[str, int] = {}
+    for match in decl_re.finditer(code):
+        name = match.group(1)
+        if name in NOT_DECLARATIONS:
+            continue
+        line = code[: match.start()].count("\n") + 1
+        # First declaration wins; a name can only be declared once per block
+        # in valid Dart, so this is safe even though the regex is approximate.
+        declared_at.setdefault(name, line)
+
+    if not declared_at:
+        return []
+
+    findings = []
+    call_re = re.compile(r"(?<![\w$.])([a-zA-Z_$][\w$]*)\s*\(")
+    for match in call_re.finditer(code):
+        name = match.group(1)
+        if name not in declared_at:
+            continue
+        line = code[: match.start()].count("\n") + 1
+        if line == declared_at[name]:
+            continue  # this is the declaration itself
+        if line < declared_at[name]:
+            findings.append(
+                f"line {line}: '{name}(...)' called before its own "
+                f"declaration on line {declared_at[name]} "
+                f"(referenced_before_declaration)"
+            )
+    return findings
+
+
 def main() -> int:
     sources = sorted(ROOT.glob("lib/**/*.dart")) + sorted(
         ROOT.glob("test/**/*.dart")
@@ -165,6 +218,15 @@ def main() -> int:
         # would silently stop the waiver below from matching.
         rel = path.relative_to(ROOT).as_posix()
         findings = local_var_risks(code) + missing_return_types(code)
+        if str(path.parent.relative_to(ROOT)).startswith("test"):
+            # Scoped to test files on purpose: this pattern only matters for
+            # local functions declared inside a `main() { ... }` block, which
+            # is where ad-hoc test helpers like `pumpApp`/`settle` live.
+            # lib/ code declares widgets and methods as top-level classes and
+            # class members, which are resolved by name regardless of
+            # textual order — the same regex applied there produced dozens of
+            # false positives on ordinary, correct widget code.
+            findings += local_function_order_risks(code)
         for target, message in unawaited_risks(code):
             reason = CONFIRMED_FALSE_POSITIVES.get((rel, target))
             if reason is None:
