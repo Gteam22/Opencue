@@ -12,6 +12,7 @@ python3 tool/check_strings_used.py
 python3 tool/check_dart_sanity.py
 python3 tool/check_dart_symbols.py
 python3 tool/check_lint_risks.py
+python3 tool/check_installer.py
 ```
 
 CI runs all of these plus the Windows release build and the installer

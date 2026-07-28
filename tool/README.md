@@ -12,6 +12,7 @@ Generators and checkers. None of this ships in the application.
 | `check_dart_sanity.py` | Structural checks on the Dart sources. |
 | `check_dart_symbols.py` | Resolves every project-internal import; reports unused and missing ones. |
 | `check_lint_risks.py` | Approximates the lints this project escalates to errors. |
+| `check_installer.py` | Structural checks on the Inno Setup script. |
 
 Run the generators from the repository root and commit their output. CI
 regenerates and diffs, so editing a generated file by hand fails the build.
@@ -77,6 +78,22 @@ entry: sqflite's `Batch.insert` returns `void`, and the heuristic matches the
 name against the repository's own `Future<void> insert`.
 
 `flutter analyze` remains the authority for all of this.
+
+## `check_installer.py`
+
+Inno Setup only compiles on Windows, and it is the very last step of CI — so a
+mistake in `installer/opencue.iss` survives every other check in the repository
+and only surfaces after a full Flutter build has already run.
+
+The error it exists for: inside `[Code]`, Inno Setup's Pascal treats `{` as a
+comment opener and the **next** `}` as its closer. A braced comment mentioning a
+constant such as `{app}` therefore ends halfway through the sentence, and the
+rest of the prose is parsed as code — reported as a baffling `'BEGIN' expected`.
+Comments in that section use `//` for this reason. The checker also asserts the
+required `[Setup]` directives are present, that `PrivilegesRequired` is still
+`lowest` (a per-user install needing no administrator rights), that the output
+is still named `OpenCue-Setup`, that the database is never shipped as an
+installed file, and that `BuildDir` stays overridable from the command line.
 
 ## On the starter library's content
 

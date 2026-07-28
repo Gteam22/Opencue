@@ -128,6 +128,7 @@ python3 tool/check_strings_used.py     # every l10n key a widget asks for exists
 python3 tool/check_dart_sanity.py      # structural checks on the Dart sources
 python3 tool/check_dart_symbols.py     # internal imports all resolve and are used
 python3 tool/check_lint_risks.py       # approximates the escalated lints
+python3 tool/check_installer.py        # structural checks on the Inno Setup script
 ```
 
 The last four are cheap Python checks that run in CI before the Dart toolchain

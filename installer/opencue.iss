@@ -113,11 +113,16 @@ Filename: "{app}\{#MyAppExeName}"; \
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-{ On upgrade Inno Setup replaces the files in {app}. The database is not in
-  {app} at all - it is written to {userappdata}\OpenCue by AppPaths in
-  lib/core/app_paths.dart - so an upgrade cannot reach it. This procedure exists
-  only to make that guarantee explicit and to fail loudly if someone ever moves
-  the data into the install directory. }
+// NOTE: comments in this section use "//" rather than braces. Inno Setup's
+// Pascal treats "{" as a comment opener and the very next "}" as its closer, so
+// a braced comment mentioning a constant like the app directory would end
+// halfway through the sentence and the remainder would be parsed as code.
+//
+// On upgrade Inno Setup replaces the installed files. The database is not in
+// the install directory at all - it is written under the user's AppData by
+// AppPaths in lib/core/app_paths.dart - so an upgrade cannot reach it. This
+// procedure exists only to make that guarantee explicit, and to say something
+// useful if a stray database ever turns up where it does not belong.
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   StrayDatabase: String;

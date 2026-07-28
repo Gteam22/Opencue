@@ -50,6 +50,7 @@ jobs:
           python tool/check_dart_sanity.py
           python tool/check_dart_symbols.py
           python tool/check_lint_risks.py
+          python tool/check_installer.py
 
       - name: Confirm the generated files are up to date
         shell: pwsh
