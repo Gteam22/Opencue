@@ -14,6 +14,16 @@ void main() {
   List<String> idsOf(List<ScoredLine> scored) =>
       scored.map((s) => s.line.id).toList();
 
+  /// Finds a line's score wherever the engine placed it (primary or
+  /// alternates). `result.primary.first` is always whichever line fills the
+  /// *safest* slot specifically — a fixed category, not "the highest-scoring
+  /// line" — so tests that check whether a preference moved the ranking need
+  /// to compare scores directly rather than read position 0.
+  int scoreOf(RecommendationResult result, String id) {
+    final all = <ScoredLine>[...result.primary, ...result.alternates];
+    return all.firstWhere((s) => s.line.id == id).score;
+  }
+
   group('approach advisory', () {
     test('is quiet when nothing is wrong', () {
       final result = engine.recommend(
@@ -331,13 +341,9 @@ void main() {
             groupSizes: <GroupSize>{GroupSize.withOneFriend},
           ),
           line(
-            'for-anyone',
+            'solo-only',
             locations: <LocationTag>{LocationTag.bar},
-            groupSizes: <GroupSize>{
-              GroupSize.alone,
-              GroupSize.withOneFriend,
-              GroupSize.smallGroup,
-            },
+            groupSizes: <GroupSize>{GroupSize.alone},
           ),
         ],
       );
@@ -444,14 +450,20 @@ void main() {
         library: library,
         preferences: const RecommendationPreferences(desiredDirectness: 1),
       );
-      expect(wantsGentle.primary.first.line.id, 'gentle');
+      expect(
+        scoreOf(wantsGentle, 'gentle'),
+        greaterThan(scoreOf(wantsGentle, 'bold')),
+      );
 
       final wantsBold = engine.recommend(
         context: situation(location: LocationTag.bar),
         library: library,
         preferences: const RecommendationPreferences(desiredDirectness: 5),
       );
-      expect(wantsBold.primary.first.line.id, 'bold');
+      expect(
+        scoreOf(wantsBold, 'bold'),
+        greaterThan(scoreOf(wantsBold, 'gentle')),
+      );
     });
 
     test('nudges toward a preferred tone', () {
@@ -473,7 +485,10 @@ void main() {
           preferredTones: <Tone>{Tone.playful},
         ),
       );
-      expect(result.primary.first.line.id, 'playful');
+      expect(
+        scoreOf(result, 'playful'),
+        greaterThan(scoreOf(result, 'safe')),
+      );
     });
   });
 

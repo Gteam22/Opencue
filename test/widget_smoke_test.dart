@@ -19,30 +19,71 @@ void main() {
   /// Nothing is stubbed: the widgets talk to the real repositories and the real
   /// recommendation engine, so this exercises the actual wiring rather than a
   /// parallel test-only assembly.
+  ///
+  /// sqflite_common_ffi runs every database operation on a background isolate.
+  /// flutter_test's default zone only understands Dart's simulated Timers and
+  /// microtasks, not a reply arriving from a real isolate, so a plain `await`
+  /// on that work — or a plain `pumpAndSettle()` waiting on it — never
+  /// completes; it eventually fails with a ten-minute timeout instead of the
+  /// few milliseconds the work actually takes. `tester.runAsync` steps outside
+  /// that simulated zone for exactly the calls that need real time to pass.
   Future<AppState> pumpApp(
     WidgetTester tester, {
     List<OpenerLine> preload = const <OpenerLine>[],
     bool seed = false,
   }) async {
-    final database = await AppDatabase.openInMemory();
+    late final AppDatabase database;
+    late final LibraryService service;
+
+    await tester.runAsync(() async {
+      database = await AppDatabase.openInMemory();
+      service = LibraryService(
+        lines: SqliteOpenerLineRepository(database.db),
+        interactions: SqliteInteractionRepository(database.db),
+        settings: SqliteSettingsRepository(database.db),
+      );
+      if (preload.isNotEmpty) {
+        await service.lines.insertMany(preload);
+      }
+      if (seed) {
+        await service.seedIfEmpty();
+      }
+    });
     addTearDown(database.close);
-    final service = LibraryService(
-      lines: SqliteOpenerLineRepository(database.db),
-      interactions: SqliteInteractionRepository(database.db),
-      settings: SqliteSettingsRepository(database.db),
-    );
-    if (preload.isNotEmpty) {
-      await service.lines.insertMany(preload);
-    }
-    if (seed) {
-      await service.seedIfEmpty();
-    }
 
     final state = AppState(service: service);
     addTearDown(state.dispose);
     await tester.pumpWidget(OpenCueApp(state: state));
-    await tester.pumpAndSettle();
+
+    // OpenCueApp.initState() kicks off state.bootstrap() itself, which does
+    // the same kind of real database I/O. Poll for it to finish inside
+    // runAsync, capped well short of pumpAndSettle's own ten-minute timeout so
+    // a genuine problem fails fast with a clear reason instead of a
+    // stack-trace-only timeout.
+    await tester.runAsync(() async {
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (state.isLoading && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    expect(
+      state.isLoading,
+      isFalse,
+      reason: 'AppState never finished bootstrapping within 20s',
+    );
+    await settle(tester);
     return state;
+  }
+
+  /// Drop-in replacement for `tester.pumpAndSettle()` after an action that
+  /// touches the database (a tap that saves, deletes, favourites, records an
+  /// outcome, and so on). See the comment on [pumpApp] for why the plain
+  /// version hangs instead of completing.
+  Future<void> settle(WidgetTester tester) async {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 60)),
+    );
+    await tester.pumpAndSettle();
   }
 
   group('startup', () {
@@ -107,7 +148,7 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('ライブラリの一言です。'), findsOneWidget);
     });
@@ -122,7 +163,7 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.favorites']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('お気に入りの一言。'), findsOneWidget);
       expect(find.text('ふつうの一言。'), findsNothing);
@@ -132,11 +173,11 @@ void main() {
       await pumpApp(tester, preload: <OpenerLine>[line('a')]);
 
       await tester.tap(find.text(stringsEn['nav.settings']!).last);
-      await tester.pumpAndSettle();
+      await settle(tester);
       expect(find.text(stringsEn['settings.language']!), findsOneWidget);
 
       await tester.tap(find.text(stringsEn['settings.about']!).last);
-      await tester.pumpAndSettle();
+      await settle(tester);
       expect(find.text(stringsEn['about.privacyNoCamera']!), findsOneWidget);
     });
   });
@@ -155,14 +196,14 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.findLine']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       expect(find.text(stringsEn['context.title']!), findsOneWidget);
 
       await tester.tap(find.text(stringsEn['location.bar']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text(stringsEn['context.showSuggestions']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('ここ、いい雰囲気ですね。'), findsOneWidget);
       expect(find.text(stringsEn['rec.category.safest']!), findsOneWidget);
@@ -183,9 +224,9 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.findLine']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['location.cafe']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       // Switch on "appears to be working", one of the five hard conditions.
       final workingSwitch = find.ancestor(
@@ -194,14 +235,14 @@ void main() {
       );
       await tester.scrollUntilVisible(workingSwitch, 200);
       await tester.tap(workingSwitch);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.scrollUntilVisible(
         find.text(stringsEn['context.showSuggestions']!),
         200,
       );
       await tester.tap(find.text(stringsEn['context.showSuggestions']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text(stringsEn['advisory.title']!), findsOneWidget);
       // The specific triggering condition must be named, not just the warning.
@@ -226,19 +267,19 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.findLine']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['location.bar']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['context.showSuggestions']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text(stringsEn['action.usedThisLine']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.tap(find.text(stringsEn['outcome.positive']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['action.save']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(state.history, hasLength(1));
       expect(state.history.single.outcome, InteractionOutcome.positive);
@@ -257,17 +298,17 @@ void main() {
       final state = await pumpApp(tester, preload: <OpenerLine>[line('a')]);
 
       await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['action.addLine']!).first);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       await tester.enterText(
         find.byType(TextFormField).first,
         '書いてみた一言です。',
       );
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['action.save']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(state.lineCount, 2);
       expect(find.text('書いてみた一言です。'), findsOneWidget);
@@ -277,11 +318,11 @@ void main() {
       final state = await pumpApp(tester, preload: <OpenerLine>[line('a')]);
 
       await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['action.addLine']!).first);
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text(stringsEn['action.save']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(state.lineCount, 1);
       expect(
@@ -297,9 +338,9 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.byIcon(Icons.star_outline).first);
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(state.lineById('a')?.isFavorite, isTrue);
     });
@@ -311,15 +352,15 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.text('消される一言。'));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.tap(find.byIcon(Icons.delete_outline));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text(stringsEn['library.deleteTitle']!), findsOneWidget);
       await tester.tap(find.text(stringsEn['action.cancel']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(state.lineCount, 1);
     });
@@ -336,9 +377,9 @@ void main() {
       );
 
       await tester.tap(find.text(stringsEn['home.browseLibrary']!));
-      await tester.pumpAndSettle();
+      await settle(tester);
       await tester.enterText(find.byType(TextField).first, '海');
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(find.text('海の話をしましょう。'), findsOneWidget);
       expect(find.text('山の話をしましょう。'), findsNothing);

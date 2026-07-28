@@ -282,15 +282,20 @@ class TransferService {
         }
         try {
           final record = InteractionRecord.fromJson(entry);
-          // An interaction pointing at a line that is not in this file and
-          // not in the library would violate the foreign key, so it is
-          // dropped with a warning rather than crashing the insert.
-          if (!lineIds.contains(record.openerLineId)) {
+          // An interaction pointing at a line that is not in this file would
+          // violate the foreign key on import, so it is dropped with a
+          // warning rather than crashing the insert. (AppState.applyImport
+          // applies a second, broader check against the real library once
+          // merge/replace has happened, since a line referenced here might
+          // already exist there under a different file; this check only
+          // covers self-consistency within the file itself.)
+          if (lineIds.contains(record.openerLineId)) {
+            interactions.add(record);
+          } else {
             warnings.add(
               'import.warning.orphanInteraction:${record.openerLineId}',
             );
           }
-          interactions.add(record);
         } on FormatException catch (error) {
           warnings.add(
             'import.warning.unreadableInteraction:$i:${error.message}',
