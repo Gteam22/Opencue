@@ -38,25 +38,35 @@ class _OpenCueAppState extends State<OpenCueApp> {
     super.dispose();
   }
 
-  /// MaterialApp sits above AppScope, so the theme and locale have to be
-  /// rebuilt from an explicit listener rather than an InheritedWidget.
+  /// MaterialApp is built below AppScope but cannot depend on it (it would
+  /// create the dependency in the wrong direction), so theme and locale
+  /// changes are picked up from this explicit listener instead.
   void _onStateChanged() {
     if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: AppInfo.appName,
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: AppTheme.themeModeFor(
-        widget.state.settings.themePreference,
-      ),
-      home: AppScope(
-        state: widget.state,
-        child: const _Shell(),
+    // AppScope must sit ABOVE MaterialApp, not inside its `home`. Routes pushed
+    // with Navigator are mounted as siblings of `home`, not as its children, so
+    // an AppScope placed inside `home` is invisible to every pushed screen —
+    // the situation builder, the line editor, the recommendations screen and
+    // the about screen all failed to find it. Wrapping MaterialApp puts the
+    // scope above the Navigator, so every route inherits it.
+    //
+    // The theme still comes from an explicit listener rather than from this
+    // scope, because MaterialApp is built below it and cannot depend on it.
+    return AppScope(
+      state: widget.state,
+      child: MaterialApp(
+        title: AppInfo.appName,
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: AppTheme.themeModeFor(
+          widget.state.settings.themePreference,
+        ),
+        home: const _Shell(),
       ),
     );
   }

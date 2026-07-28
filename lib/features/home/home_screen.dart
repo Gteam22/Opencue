@@ -239,7 +239,14 @@ class _ScanPlaceholder extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Row(
+                    // Wrap, not Row: "Planned for a later version" is a long
+                    // label, and in a narrow window (or a longer translation)
+                    // the two together overflow a fixed Row. Wrap drops the
+                    // badge onto a second line instead of clipping it.
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: <Widget>[
                         Text(
                           strings.t('home.scan'),
@@ -247,7 +254,6 @@ class _ScanPlaceholder extends StatelessWidget {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
-                        const SizedBox(width: 8),
                         MetaTag(strings.t('home.scanPlanned')),
                       ],
                     ),

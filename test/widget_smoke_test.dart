@@ -42,6 +42,15 @@ void main() {
     List<OpenerLine> preload = const <OpenerLine>[],
     bool seed = false,
   }) async {
+    // The test surface defaults to 800x600, which is smaller than the minimum
+    // window this desktop app targets and tighter than any real user's window.
+    // Sizing it explicitly means layout overflows are caught at a size that
+    // actually matters, rather than being either hidden or falsely triggered.
+    // Above AppTheme.railBreakpoint (760), so this exercises the rail layout.
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     late final AppDatabase database;
     late final LibraryService service;
 
@@ -161,7 +170,14 @@ void main() {
         ],
       );
 
-      await tester.tap(find.text(stringsEn['home.favorites']!));
+      // 'Favourites' is also a navigation destination label, so this scopes
+      // the tap to the shortcut button on the home screen itself.
+      await tester.tap(
+        find.descendant(
+          of: find.byType(OutlinedButton),
+          matching: find.text(stringsEn['home.favorites']!),
+        ),
+      );
       await settle(tester);
 
       expect(find.text('お気に入りの一言。'), findsOneWidget);
