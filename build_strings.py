@@ -19,21 +19,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 S = {}
 
 
-def strip_dart_comments(text):
-    """Removes block and line comments from a fragment of Dart source.
-
-    Enum bodies are parsed by splitting on commas. A doc comment containing a
-    comma - "The scan could see the place, and no person was in it." - splits
-    mid-sentence, gluing the identifier that follows onto comment text, where
-    the bare-word filter discards it. The value then silently vanishes from
-    the parser's view of the enum. That is what made every seed line tagged
-    `alone` or `withOneFriend` fail validation, while `smallGroup` and
-    `largeGroup`, which carry no doc comments, passed.
-    """
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
-    return re.sub(r'//[^\n]*', '', text)
-
-
 def add(key, en, ja):
     if key in S:
         raise SystemExit('duplicate string key: %s' % key)
@@ -1065,9 +1050,7 @@ def check_enum_coverage():
                encoding='utf-8').read()
     missing = []
     for match in re.finditer(r'enum\s+(\w+)\s*\{(.*?)\}', src, re.S):
-        name = match.group(1)
-        # Strip comments before splitting on ';': see build_seed.py.
-        body = strip_dart_comments(match.group(2)).split(';')[0]
+        name, body = match.group(1), match.group(2).split(';')[0]
         prefix = ENUM_PREFIX.get(name)
         if prefix is None:
             continue

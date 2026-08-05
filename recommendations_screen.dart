@@ -108,9 +108,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
       openAtBranchId: branchId,
       scanDraft: widget.scanDraft,
     );
-    // _applyDraft reads AppScope, so the mounted guard is required after the
-    // await: use_build_context_synchronously is an analyzer error here.
-    if (adjusted != null && mounted) _applyDraft(adjusted);
+    if (adjusted != null) _applyDraft(adjusted);
   }
 
   void _rescore() => setState(() => _result = _score());
