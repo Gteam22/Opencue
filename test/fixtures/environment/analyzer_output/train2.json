@@ -1,0 +1,33 @@
+{
+  "_note": [
+    "Hand-authored representation of analyzer output for Train2.jpg.",
+    "NOT produced by running ML Kit. See manifest.json.",
+    "",
+    "Note the empty transit OCR: the signage in this carriage is Korean, and",
+    "the Japanese/Latin transit vocabulary in TextEvidence does not cover it.",
+    "This fixture therefore tests the case that matters most - recognising a",
+    "train interior from objects and scene alone, with no usable text at all."
+  ],
+  "imageQualityAdequate": true,
+  "ocrLines": [],
+  "labels": [
+    {"text": "vehicle", "confidence": 0.81},
+    {"text": "person", "confidence": 0.94},
+    {"text": "crowd", "confidence": 0.78},
+    {"text": "text", "confidence": 0.72},
+    {"text": "luggage", "confidence": 0.63},
+    {"text": "ceiling", "confidence": 0.60}
+  ],
+  "objects": [
+    {"canonical": "handrail", "confidence": 0.79},
+    {"canonical": "vehicle_interior", "confidence": 0.74},
+    {"canonical": "train", "confidence": 0.58}
+  ],
+  "sceneScores": {"trainInterior": 68},
+  "personDetections": [
+    [0.93, 0.91, 0.88, 0.86, 0.84, 0.81, 0.78, 0.74],
+    [0.92, 0.90, 0.89, 0.85, 0.83, 0.80, 0.77],
+    [0.94, 0.90, 0.87, 0.86, 0.82, 0.79, 0.76, 0.72]
+  ],
+  "flatSurfaces": 2
+}
