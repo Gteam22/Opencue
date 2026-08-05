@@ -22,10 +22,9 @@ class ContextPreset {
     this.isStarter = false,
     this.sortOrder = 0,
     DateTime? createdAt,
-    DateTime? lastUsedAt,
+    this.lastUsedAt,
     this.timesUsed = 0,
-  }) : createdAt = createdAt ?? DateTime.now().toUtc(),
-       lastUsedAt = lastUsedAt;
+  }) : createdAt = createdAt ?? DateTime.now().toUtc();
 
   final String id;
 

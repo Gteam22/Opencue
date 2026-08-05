@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 /// Geometry for the radial context menu.
 ///
 /// Deliberately free of Flutter, `dart:ui` and even `Offset`, so that every
@@ -15,6 +13,9 @@ import 'dart:math' as math;
 /// `atan2(dy, dx)`. Sector 0 therefore begins at the top and the ring fills
 /// clockwise, which is the order the labels read in.
 library;
+
+import 'dart:math' as math;
+
 
 /// Which part of the menu a pointer is over.
 enum RadialZone {

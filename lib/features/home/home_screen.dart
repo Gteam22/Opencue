@@ -4,7 +4,6 @@ import '../../core/app_info.dart';
 import '../../core/theme.dart';
 import '../../domain/models/interaction_record.dart';
 import '../../data/scan/scan_capability.dart';
-import '../context_builder/context_builder_screen.dart';
 import '../scan/scan_screen.dart';
 import '../../domain/recommendation/recommendation_models.dart';
 import '../context_builder/context_composer_screen.dart';

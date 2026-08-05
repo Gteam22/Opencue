@@ -1,6 +1,3 @@
-import '../enums/enums.dart';
-import '../scan/venue_category.dart';
-
 /// The radial context menu's node tree.
 ///
 /// Flutter-free, like the rest of `lib/domain`. Nodes carry a **localization
@@ -14,6 +11,10 @@ import '../scan/venue_category.dart';
 /// appear here: `test/radial_menu_tree_test.dart` asserts that every value of
 /// every dimension the menu covers is reachable from the root.
 library;
+
+import '../enums/enums.dart';
+import '../scan/venue_category.dart';
+
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -360,12 +361,14 @@ RadialMenuNode _people() {
             ),
         ],
       ),
-      RadialMenuNode(
+      // Wholly constant, unlike its sibling above, which builds its children
+      // by looping over GroupSize.values.
+      const RadialMenuNode(
         id: 'people.interaction',
         labelKey: 'radial.people.interaction',
         iconId: 'interaction',
         allowMultipleSelection: true,
-        children: const <RadialMenuNode>[
+        children: <RadialMenuNode>[
           RadialMenuNode(
             id: 'people.interaction.eyeContact',
             labelKey: 'context.eyeContact',

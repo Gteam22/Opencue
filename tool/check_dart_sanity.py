@@ -133,6 +133,63 @@ def scan(text: str) -> list[str]:
     return problems
 
 
+def check_directive_order(text: str) -> list[str]:
+    """Flags a `library;` directive that does not come first.
+
+    Dart requires the library directive to precede every other directive.
+    Placing it after the imports - which reads naturally, since the file's
+    doc comment usually sits above the code rather than above the imports -
+    is a hard compile error, not a style nit, and it takes down every test
+    that transitively imports the file. It cost a whole CI run once.
+
+    Only unindented directives at the start of a line are considered, so the
+    word "library" inside a comment or a string is ignored.
+    """
+    problems: list[str] = []
+    seen_directive: str | None = None
+    seen_at = 0
+    in_block_comment = False
+
+    for number, raw_line in enumerate(text.split("\n"), start=1):
+        line = raw_line.strip()
+
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+        if line.startswith("/*"):
+            if "*/" not in line:
+                in_block_comment = True
+            continue
+        if not line or line.startswith("//"):
+            continue
+
+        if line.startswith("library") and (
+            line == "library;" or line.startswith("library ")
+        ):
+            if seen_directive is not None:
+                problems.append(
+                    f"line {number}: the library directive must come before "
+                    f"all other directives, but '{seen_directive}' appears "
+                    f"at line {seen_at}"
+                )
+            return problems
+
+        for keyword in ("import ", "export ", "part "):
+            if line.startswith(keyword):
+                if seen_directive is None:
+                    seen_directive = keyword.strip()
+                    seen_at = number
+                break
+        else:
+            # The first non-directive, non-comment line: any library directive
+            # below this point is inside the body and not our concern.
+            if seen_directive is not None or not line.startswith("@"):
+                return problems
+
+    return problems
+
+
 def main() -> int:
     failures = 0
     files = 0
@@ -144,6 +201,7 @@ def main() -> int:
         rel = path.relative_to(ROOT)
         text = path.read_text(encoding="utf-8")
         problems = scan(text)
+        problems.extend(check_directive_order(text))
 
         if not text.endswith("\n"):
             problems.append("file does not end with a newline")

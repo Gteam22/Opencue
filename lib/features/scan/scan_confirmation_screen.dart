@@ -80,11 +80,15 @@ class _ScanConfirmationScreenState extends State<ScanConfirmationScreen> {
   /// Shared by the confirm button and the radial correction path so the two
   /// cannot describe the same form differently.
   ContextSnapshot _asSnapshot() {
+    // These three are nullable on this screen, where null means "the scan did
+    // not establish it and the user has not said". ContextSnapshot has no such
+    // state, so each falls back to the same value the model itself defaults
+    // to, which is what the engine reads as "unknown" rather than as a claim.
     return ContextSnapshot(
-      location: _location,
+      location: _location ?? LocationTag.other,
       activity: _activity,
-      groupSize: _groupSize,
-      noiseLevel: _noise,
+      groupSize: _groupSize ?? GroupSize.unknown,
+      noiseLevel: _noise ?? NoiseLevel.normal,
       observableCues: _cues,
       eyeContact: _eyeContact,
       conversationAlreadyStarted: _conversationStarted,
