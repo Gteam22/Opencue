@@ -5,6 +5,44 @@ This project follows [Semantic Versioning](https://semver.org/). The version in
 every other copy agrees, and `test/version_consistency_test.dart` requires this
 file to mention the current version.
 
+## [Unreleased]
+
+### Added
+
+- **Radial context menu.** A gesture-driven, three-layer menu for building or
+  correcting a situation with one thumb. Hold the trigger and drag to select in
+  one continuous gesture, or tap to pin the menu open and browse it. Eight root
+  sectors — place, people, activity, cue, atmosphere, tone, caution, finish —
+  generated from the same enums the recommendation engine, the scan and the
+  library filters use, so no menu option can drift from the domain model.
+  Edge-aware placement, left- and right-handed layouts, Android haptics,
+  Windows mouse and keyboard control, and reduced-motion support.
+- **Context presets.** Saved and recent contexts, with eight starter presets
+  seeded on first run. Rename, favourite, reorder and delete; a renamed starter
+  preset becomes an ordinary user preset. Stored in the new `context_presets`
+  table.
+- **Shared context draft.** `ContextDraft` is now the single object the radial
+  menu, the scan-correction path, the detailed editor and the preset loader all
+  edit, with per-dimension provenance so scan-inferred, user-corrected and
+  default values are distinguishable — by glyph, not by colour alone.
+- **Linear accessibility fallback.** A searchable list walking the same menu
+  tree, reachable from the composer and from a semantic action, so every radial
+  option is available to screen-reader and keyboard users.
+- **In-place context adjustment** on the recommendations screen: a chip row
+  where each chip reopens the menu at its own branch, and an *Adjust* action
+  that rescores without leaving the screen.
+- **Library filters for activity, group size and noise level.** `OpenerLine`
+  has always carried these three tag sets and the engine has always scored
+  them, but `LibraryQuery` could not filter on any of them, leaving three
+  tagged dimensions of every line invisible to search.
+- **Settings** for radial handedness (automatic, left, right), menu haptics,
+  and whether the gesture tutorial has been seen.
+
+### Changed
+
+- Database schema raised to **version 3**, adding `context_presets`. The
+  upgrade is additive; existing lines, history and settings are untouched.
+
 ## [0.1.0] — First working version
 
 The first complete build: a Windows desktop application with a local library, a

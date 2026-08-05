@@ -103,6 +103,211 @@ Export a backup first if there is any chance you want it later.
 
 ---
 
+## For Android users
+
+### Getting the APK
+
+Open the **Actions** tab, click the latest **Build Android** run, and download
+the **OpenCue-android** artifact. Inside are three files; the one you want is
+`OpenCue-android-release-UNSIGNED-debugkey.apk`.
+
+**That name is literal.** No release keystore is configured, so this APK is
+signed with the public Flutter debug key. It installs and runs perfectly well
+for your own use. It is not suitable for giving to other people or uploading to
+the Play Store, because a debug key proves nothing about who built it. See
+*Android signing* below.
+
+### Installing
+
+Tap the APK on the device. Android will ask you to allow installing from this
+source; that prompt is expected for any app not from the Play Store.
+
+### Camera permission
+
+Requested the first time you open **Scan environment**, and only after a screen
+explaining what the camera is used for. Declining leaves everything else
+working: manual situation entry, the library and recommendations are unaffected.
+
+### What the scan does and does not do
+
+It reads the **place**: a café, a station, a bookshop, a dog, an umbrella. It
+suggests a location, an activity, a noise level and some cues, and you correct
+them before anything is used.
+
+It can also estimate whether **no person, one person, two people or a group**
+is visible. That is coarse anonymous counting from a generic person detector,
+and it exists for one reason: a line aimed at one person talks past their
+friend, and the library has a whole category written to address both people
+instead.
+
+It does **not** identify people, recognise faces or infer personal traits.
+There is no facial recognition, no face embeddings, no biometric data, no
+tracking of anyone between frames or between scans, and no inference of
+gender, age, ethnicity, attractiveness, mood, relationship status or romantic
+interest. Bounding boxes are transient and never stored; what is saved is a
+bucket and a confidence.
+
+Nothing in the app can tell you whether someone is interested, available or
+willing to be approached, and nothing in it tries. Group size changes the
+*wording* of a suggestion. It is never evidence that an approach is welcome,
+and it never softens a caution.
+
+### What is stored
+
+Only the confirmed context: venue category, cues, coarse group size, timestamp,
+and that it came from a scan. Images are deleted after analysis by default;
+only the confirmed environmental context is saved.
+
+Captured images are analysed on the device and deleted immediately — on the
+failure path as well as the success path. They are never uploaded, never added
+to your gallery, never included in an export, and never shown again. The only
+exception is the developer setting *Retain scan images for debugging*, which is
+off by default, warns before it turns on, keeps files in app-private storage,
+and excludes them from exports regardless.
+
+### Where and when not to use it
+
+Do not use the scan where photography is prohibited or would be inappropriate.
+Be aware that pointing a phone camera at people in public may be unlawful where
+you are — in Japan this is covered by prefectural nuisance ordinances, and
+stations and trains are the highest-risk settings. Point it at the room.
+
+### Backing up and uninstalling
+
+Export from **Settings → Your data**, which produces the same JSON the Windows
+build reads. Uninstalling removes the app and its database in the normal
+Android way; export first if you want to keep anything.
+
+---
+
+## For Android developers
+
+### Prerequisites
+
+- Flutter stable (same constraint as the desktop build: Dart 3.6+)
+- **JDK 17** — required by the Android Gradle Plugin
+- Android SDK, and a device with USB debugging on
+
+`android/` is generated boilerplate and is not committed, the same arrangement
+`windows/` uses. Recreate it with:
+
+```bash
+flutter create --platforms=android --project-name opencue \
+  --org com.example.opencue .
+```
+
+The application ID `com.example.opencue` is a **placeholder**. Change it in
+`android/app/build.gradle` before any real distribution.
+
+### Running and building
+
+```bash
+flutter devices
+flutter run -d <device-id>
+
+flutter build apk --debug
+flutter build apk --release
+flutter build appbundle --release
+```
+
+Outputs land in `build/app/outputs/flutter-apk/` and
+`build/app/outputs/bundle/release/`.
+
+### Android signing
+
+Not configured, deliberately: no private key belongs in this repository.
+
+To sign properly, generate a keystore, put its details in
+`android/key.properties` (which `.gitignore` already excludes), and reference it
+from `android/app/build.gradle`:
+
+```bash
+keytool -genkey -v -keystore ~/opencue-release.jks \
+  -keyalg RSA -keysize 2048 -validity 10000 -alias opencue
+```
+
+For CI, supply the keystore as a base64 repository secret and decode it in the
+workflow. Until that exists, the workflow labels its output
+`UNSIGNED-debugkey` and says so in the run summary rather than implying the APK
+is production-ready.
+
+### Package selection
+
+| Package | Why |
+| --- | --- |
+| `camera` | The Flutter team's own plugin, and the only one with a first-party Windows implementation, so declaring it does not put the desktop build at risk. |
+| `google_mlkit_image_labeling` | On-device labelling from the maintained `flutter-ml` wrapper, not the deprecated Firebase ML APIs. **Labelling only** — no face detection, no object detection, no OCR — because "what kind of place is this" is the only question asked. |
+| `permission_handler` | Distinguishes *denied* from *permanently denied*, which the camera plugin cannot, and which the two permission screens depend on. |
+| `sqflite` | The Android SQLite implementation. Same `sqflite_common` API as the desktop FFI build, so no repository code differs. |
+
+### Camera lifecycle
+
+`ScanScreen` observes `WidgetsBindingObserver` and releases the camera on
+`inactive`, `paused` and `hidden`, re-acquiring on `resumed`. There is no
+foreground service and no background camera use. The preview runs continuously
+once started, but **nothing is analysed until Scan is tapped** — the preview is
+never fed to the model.
+
+### The scan pipeline
+
+```
+ImageFrameSource  ->  EnvironmentalScanService  ->  EnvironmentalVisionAnalyzer
+   (camera/fake)         (owns image cleanup)          (ML Kit / fake)
+                                  |
+                        ObservationNormalizer   <- ScanHeuristics (rules)
+                                  |
+                        EnvironmentalObservation
+                                  |
+                     user confirmation (mandatory)
+                                  |
+                       ContextSnapshotMapper
+                                  |
+                    ContextSnapshot(source: cameraScan)
+                                  |
+                    the existing RecommendationEngine
+```
+
+The engine has no camera or ML dependency and no scan-specific path. A scanned
+context and a manually entered one with the same values produce identical
+recommendations; a test asserts it.
+
+### Detection-to-context mapping
+
+All rules live in `lib/domain/scan/scan_heuristics.dart` as data, with weights
+tuned so a single generic label cannot preselect anything. `neverInferred`
+blocks the six cues that would amount to judging a person, and the normalizer
+strips them again after scoring so a rule added later by mistake still cannot
+leak one. Tests cover every rule.
+
+### Testing without hardware
+
+`FakeFrameSource` and `FakeVisionAnalyzer` implement the same interfaces as the
+real ones, so the entire pipeline — including image cleanup on the failure path
+— is tested with no camera, no emulator and no model.
+
+### Known detection limitations
+
+- Label-based inference is often wrong; every result is a suggestion.
+- Similar interiors confuse it: cafés, restaurants and hotel lobbies overlap
+  heavily, so a near-tie is deliberately demoted rather than guessed.
+- Cosplay is capped below high confidence because costume labels fire on
+  uniforms, mascots and shop mannequins.
+- Noise level is inferred from the location, not heard. A quiet bar reports
+  loud.
+- Nothing about people is detected at all, by design.
+
+### Adding a future model
+
+Implement `EnvironmentalVisionAnalyzer` and pass it to
+`EnvironmentalScanService`. Nothing else changes. A remote analyzer could
+satisfy the same interface, but must not become the default path: the current
+privacy claims depend on analysis being on-device.
+
+See `docs/SMART_GLASSES_INTEGRATION.md` for implementing an `ImageFrameSource`
+backed by other hardware.
+
+---
+
 ## For developers
 
 ### Prerequisites
@@ -219,13 +424,14 @@ knows nothing about the installer.
 
 ### Database schema
 
-Current version: **2**. `%APPDATA%\OpenCue\opencue.db`.
+Current version: **3**. `%APPDATA%\OpenCue\opencue.db`.
 
 | Table | Purpose |
 | --- | --- |
 | `opener_lines` | One row per line. Tag sets are stored as comma-separated enum names. |
 | `interactions` | One row per recorded use. `context_snapshot` is a JSON blob; `opener_line_id` cascades on delete. |
 | `settings` | Key/value. |
+| `context_presets` | One row per saved context. `draft` is a JSON blob, for the same reason `interactions.context_snapshot` is: adding a field to `ContextDraft` must not require a migration. |
 
 Tag sets are denormalised into text columns rather than given join tables. The
 library is a few hundred rows read entirely into memory at launch, so a join
