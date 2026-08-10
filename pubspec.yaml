@@ -69,6 +69,13 @@ dependencies:
   # earlier native plugin did.
   flutter_tts: ^4.2.0
 
+  # --- Conversation Assist -------------------------------------------------
+  # Short, user-triggered recognition through the device speech service. The
+  # app never writes microphone audio to disk; only the returned transcript is
+  # kept in the in-memory assist session. Wrapped behind our own interface so a
+  # future streaming/on-device recognizer can replace it without touching UI.
+  speech_to_text: ^7.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

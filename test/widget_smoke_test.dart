@@ -60,8 +60,9 @@ void main() {
 
   /// Walks from the home screen to the detailed context editor.
   ///
-  /// The home screen's primary action now opens the radial composer rather
-  /// than the form directly. These tests drive the form, because it is the
+  /// The manual Find a line action opens the radial composer rather than the
+  /// form directly. Conversation Assist is the primary action; these tests
+  /// drive the manual form, because it is the
   /// surface that exercises every context dimension and it must keep working
   /// - the radial menu is an addition, not a replacement. The composer's
   /// "Detailed editor" button is the documented way through, so tapping it

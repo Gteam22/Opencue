@@ -17,10 +17,9 @@ class ScanCapability {
   /// the scan entry point is hidden rather than shown broken.
   static bool get hasCameraImplementation => Platform.isAndroid;
 
-  /// True when the scan should appear as the primary action.
-  ///
-  /// Windows keeps its desktop layout with manual entry first.
-  static bool get scanIsPrimaryAction => hasCameraImplementation;
+  /// Retained for callers outside this package. Conversation Assist now owns
+  /// the primary action on every platform, so Scan is always secondary.
+  static bool get scanIsPrimaryAction => false;
 
   /// Why the scan is unavailable, as a localisation key, or null when it is.
   static String? get unavailableReasonKey =>

@@ -83,6 +83,7 @@ jobs:
               .
           fi
           test -d android/app || { echo "flutter create produced no android/app"; exit 1; }
+          python3 tool/configure_generated_platforms.py
 
       - name: Build the debug APK
         run: flutter build apk --debug

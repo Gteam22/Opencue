@@ -346,6 +346,7 @@ jobs:
             flutter create --platforms=android --project-name opencue \
               --org com.example.opencue .
           fi
+          python3 tool/configure_generated_platforms.py
 
       - name: Build the debug APK
         # The real gate for this job.

@@ -15,7 +15,63 @@ const Map<String, String> stringsEn = <String, String>{
   'about.privacyLocal':
       'All data in this version is stored locally on this computer.',
   'about.privacyNoCamera': 'This version does not access the camera.',
-  'about.privacyNoMic': 'This version does not access the microphone.',
+  'about.privacyNoMic':
+      'The microphone is used only after you tap Listen. OpenCue does not save raw audio.',
+  'common.cancel': 'Cancel',
+  'assist.title': 'Conversation Assist',
+  'assist.subtitle':
+      'Listen to one short turn, understand what was said, and choose a natural reply.',
+  'assist.listen': 'Listen',
+  'assist.stop': 'Stop listening',
+  'assist.homeSubtitle': 'Hear the conversation and suggest what to say next',
+  'assist.ready': 'Tap when the other person starts speaking.',
+  'assist.initializing': 'Preparing speech recognition…',
+  'assist.listening': 'Listening now — tap Stop any time.',
+  'assist.understanding': 'Understanding the conversation…',
+  'assist.readyAgain': 'Ready for another turn.',
+  'assist.noSpeech': 'I did not catch speech. Try again or type it below.',
+  'assist.unavailable':
+      'Speech recognition is unavailable on this device. You can still type the transcript.',
+  'assist.permissionDenied':
+      'Microphone permission was denied. Enable it in system settings, or type below.',
+  'assist.error': 'Recognition stopped unexpectedly. Please try again.',
+  'assist.transcript': 'What I heard',
+  'assist.transcriptHint': 'You can also type or correct the conversation here.',
+  'assist.useEdited': 'Use edited transcript',
+  'assist.inputLanguage': 'Recognition',
+  'assist.language.automatic': 'Auto / device language',
+  'assist.language.japanese': 'Japanese',
+  'assist.language.korean': 'Korean',
+  'assist.language.english': 'English',
+  'assist.style': 'Response style',
+  'assist.tone.natural': 'Natural',
+  'assist.tone.funny': 'Funny',
+  'assist.tone.flirty': 'Flirty',
+  'assist.tone.gentleman': 'Gentleman',
+  'assist.tone.bold': 'Bold',
+  'assist.boldness': 'Maximum boldness',
+  'assist.adultContent': 'Adult suggestions',
+  'assist.adultContentHint':
+      'Off by default. Explicit lines never appear unless you opt in.',
+  'assist.adultConfirmTitle': 'Enable adult suggestions?',
+  'assist.adultConfirmBody':
+      'This can include sexual or explicit curated lines. You control the maximum boldness and can turn it off at any time.',
+  'assist.adultEnable': 'Enable',
+  'assist.suggestions': 'Suggested replies',
+  'assist.more': 'More',
+  'assist.copy': 'Copy Japanese line',
+  'assist.safeFallback':
+      'The meaning was uncertain, so these are low-pressure fallback options.',
+  'assist.lowConfidence':
+      'I may have misheard that. Check the transcript or listen again.',
+  'assist.style.natural': 'Natural',
+  'assist.sessionHistory': 'This session',
+  'assist.detected.japanese': 'JA',
+  'assist.detected.korean': 'KO',
+  'assist.detected.english': 'EN',
+  'assist.detected.unknown': '—',
+  'assist.privacy':
+      'Privacy: listening starts only when you tap Listen. Raw audio is not stored by OpenCue; the short transcript and session history stay in memory and are cleared when you leave this screen.',
   'about.privacyNoProfiling':
       'This version does not identify or profile other people.',
   'about.privacyNoTelemetry':
@@ -307,7 +363,7 @@ const Map<String, String> stringsEn = <String, String>{
   'home.recentEmpty': 'Nothing recorded yet.',
   'home.scan': 'Scan surroundings',
   'home.scanExplain':
-      'A later version may read environmental context from a scan you trigger yourself. This version has no camera or microphone access of any kind.',
+      'Environmental Scan is unavailable on this platform. Use Listen or describe the situation manually.',
   'home.scanPlanned': 'Planned for a later version',
   'import.cancelled': 'Import cancelled.',
   'import.chooseMode': 'How should this be imported?',

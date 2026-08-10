@@ -7,14 +7,15 @@ import '../../data/scan/scan_capability.dart';
 import '../scan/scan_screen.dart';
 import '../../domain/recommendation/recommendation_models.dart';
 import '../context_builder/context_composer_screen.dart';
+import '../conversation/conversation_assist_screen.dart';
 import '../recommendations/recommendations_screen.dart';
 import '../shared/app_scope.dart';
 import '../shared/widgets.dart';
 
 /// The landing screen.
 ///
-/// One large primary action, two shortcuts, a short recent list, and an
-/// honest placeholder for the scan feature that this version does not have.
+/// Conversation Assist leads; manual situation building and environmental
+/// scanning remain available as secondary paths.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({
     required this.onOpenLibrary,
@@ -65,70 +66,22 @@ class HomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 28),
 
-              // Primary action.
-              //
-              // On a platform with a camera implementation the scan leads and
-              // manual entry becomes the secondary action; on Windows the
-              // order is unchanged and the scan is not offered at all.
-              // Decided by capability, not by platform name.
-              if (ScanCapability.scanIsPrimaryAction) ...<Widget>[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const ScanScreen(),
-                      ),
-                    ),
-                    icon: const Icon(Icons.center_focus_strong_outlined),
-                    label: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      child: Column(
-                        children: <Widget>[
-                          Text(
-                            strings.t('scan.title'),
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.colorScheme.onPrimary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            strings.t('scan.subtitle'),
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onPrimary
-                                  .withValues(alpha: 0.85),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.gap),
-              ],
-
               SizedBox(
                 width: double.infinity,
-                child: ScanCapability.scanIsPrimaryAction
-                    ? OutlinedButton.icon(
-                        onPressed: () => _chooseSituation(context),
-                        icon: const Icon(Icons.explore_outlined),
-                        label: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          child: Text(strings.t('home.findLine')),
-                        ),
-                      )
-                    : FilledButton.icon(
-                  onPressed: () => _chooseSituation(context),
-                  icon: const Icon(Icons.explore_outlined),
+                child: FilledButton.icon(
+                  key: const Key('home-listen'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ConversationAssistScreen(),
+                    ),
+                  ),
+                  icon: const Icon(Icons.mic_rounded),
                   label: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Column(
                       children: <Widget>[
                         Text(
-                          strings.t('home.findLine'),
+                          strings.t('assist.listen'),
                           style: theme.textTheme.titleMedium?.copyWith(
                             color: theme.colorScheme.onPrimary,
                             fontWeight: FontWeight.w600,
@@ -136,7 +89,8 @@ class HomeScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          strings.t('home.findLineSubtitle'),
+                          strings.t('assist.homeSubtitle'),
+                          textAlign: TextAlign.center,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onPrimary
                                 .withValues(alpha: 0.85),
@@ -146,6 +100,33 @@ class HomeScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+              ),
+              const SizedBox(height: AppTheme.gap),
+
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _chooseSituation(context),
+                      icon: const Icon(Icons.explore_outlined),
+                      label: Text(strings.t('home.findLine')),
+                    ),
+                  ),
+                  if (ScanCapability.hasCameraImplementation) ...<Widget>[
+                    const SizedBox(width: AppTheme.gap),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ScanScreen(),
+                          ),
+                        ),
+                        icon: const Icon(Icons.center_focus_strong_outlined),
+                        label: Text(strings.t('scan.button')),
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: AppTheme.gap),
 
@@ -180,9 +161,8 @@ class HomeScreen extends StatelessWidget {
 
               _RecentSection(onOpenHistory: onOpenHistory),
               const SizedBox(height: 24),
-              // Only where no camera implementation exists. On Android the
-              // real scan is the primary action above, so advertising it as
-              // "planned" would be nonsense.
+              // Only where no camera implementation exists. On Android Scan
+              // remains available in the secondary action row above.
               if (!ScanCapability.hasCameraImplementation)
                 const _ScanPlaceholder(),
               const SizedBox(height: 24),

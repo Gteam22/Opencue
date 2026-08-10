@@ -1,0 +1,563 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../core/theme.dart';
+import '../../data/conversation/speech_to_text_recognition_service.dart';
+import '../../domain/conversation/conversation_assist_controller.dart';
+import '../../domain/conversation/conversation_models.dart';
+import '../../domain/enums/enums.dart';
+import '../../domain/models/opener_line.dart';
+import '../library/line_detail_screen.dart';
+import '../shared/app_scope.dart';
+import '../shared/widgets.dart';
+
+class ConversationAssistScreen extends StatefulWidget {
+  const ConversationAssistScreen({super.key});
+
+  @override
+  State<ConversationAssistScreen> createState() =>
+      _ConversationAssistScreenState();
+}
+
+class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
+  late final ConversationAssistController _controller;
+  final TextEditingController _transcript = TextEditingController();
+  final FocusNode _transcriptFocus = FocusNode();
+  ConversationPreferences _preferences = const ConversationPreferences();
+  bool _loadedAdultPreference = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ConversationAssistController(
+      recognition: SpeechToTextRecognitionService(),
+    )..addListener(_onControllerChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_loadedAdultPreference) {
+      _loadedAdultPreference = true;
+      _preferences = _preferences.copyWith(
+        adultContentEnabled:
+            AppScope.of(context).settings.conversationAssistAdultContentEnabled,
+      );
+    }
+  }
+
+  void _onControllerChanged() {
+    if (!_transcriptFocus.hasFocus &&
+        _transcript.text != _controller.transcript) {
+      _transcript.value = TextEditingValue(
+        text: _controller.transcript,
+        selection: TextSelection.collapsed(
+          offset: _controller.transcript.length,
+        ),
+      );
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerChanged);
+    _controller.dispose();
+    _transcript.dispose();
+    _transcriptFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _listen() async {
+    final state = AppScope.read(context);
+    FocusScope.of(context).unfocus();
+    await _controller.start(
+      library: state.lines,
+      preferences: _preferences,
+    );
+  }
+
+  void _suggestEditedText() {
+    _controller.suggestFromText(
+      _transcript.text,
+      library: AppScope.read(context).lines,
+      preferences: _preferences,
+    );
+    FocusScope.of(context).unfocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(strings.t('assist.title'))),
+      body: ListView(
+        padding: const EdgeInsets.only(bottom: 32),
+        children: <Widget>[
+          ContentColumn(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  strings.t('assist.subtitle'),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 16),
+                _ListenPanel(
+                  controller: _controller,
+                  onListen: _listen,
+                  onStop: _controller.stop,
+                  onRetry: _listen,
+                ),
+                const SizedBox(height: AppTheme.gap),
+                _InputLanguageControl(controller: _controller),
+                const SizedBox(height: AppTheme.gap),
+                TextField(
+                  key: const Key('assist-transcript'),
+                  controller: _transcript,
+                  focusNode: _transcriptFocus,
+                  minLines: 2,
+                  maxLines: 4,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _suggestEditedText(),
+                  decoration: InputDecoration(
+                    labelText: strings.t('assist.transcript'),
+                    hintText: strings.t('assist.transcriptHint'),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      tooltip: strings.t('assist.useEdited'),
+                      onPressed: _suggestEditedText,
+                      icon: const Icon(Icons.auto_awesome_outlined),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _PreferenceControls(
+                  preferences: _preferences,
+                  onChanged: _setPreferences,
+                  onAdultChanged: _setAdultContent,
+                ),
+                const SizedBox(height: 20),
+                if (_controller.phase ==
+                    ConversationAssistPhase.understanding)
+                  const Center(child: CircularProgressIndicator()),
+                if (_controller.result != null)
+                  _Suggestions(
+                    result: _controller.result!,
+                    onMore: _controller.more,
+                  ),
+                if (_controller.history.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 20),
+                  _SessionHistory(turns: _controller.history),
+                ],
+                const SizedBox(height: 16),
+                Text(
+                  strings.t('assist.privacy'),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _setPreferences(ConversationPreferences value) {
+    setState(() => _preferences = value);
+    _controller.setPreferences(value);
+  }
+
+  Future<void> _setAdultContent(bool enabled) async {
+    if (enabled) {
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(AppScope.strings(context).t('assist.adultConfirmTitle')),
+          content: Text(AppScope.strings(context).t('assist.adultConfirmBody')),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(AppScope.strings(context).t('common.cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(AppScope.strings(context).t('assist.adultEnable')),
+            ),
+          ],
+        ),
+      );
+      if (accepted != true || !mounted) return;
+    }
+    final next = _preferences.copyWith(
+      adultContentEnabled: enabled,
+      maxBoldness: enabled
+          ? _preferences.maxBoldness
+          : (_preferences.maxBoldness.index >
+                  ConversationBoldness.flirty.index
+              ? ConversationBoldness.flirty
+              : _preferences.maxBoldness),
+    );
+    setState(() => _preferences = next);
+    _controller.setPreferences(next);
+    final state = AppScope.read(context);
+    await state.updateSettings(
+      state.settings.copyWith(
+        conversationAssistAdultContentEnabled: enabled,
+      ),
+    );
+  }
+}
+
+class _ListenPanel extends StatelessWidget {
+  const _ListenPanel({
+    required this.controller,
+    required this.onListen,
+    required this.onStop,
+    required this.onRetry,
+  });
+
+  final ConversationAssistController controller;
+  final Future<void> Function() onListen;
+  final Future<void> Function() onStop;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    final theme = Theme.of(context);
+    final listening = controller.isListening;
+    final phase = controller.phase;
+    final status = switch (phase) {
+      ConversationAssistPhase.idle => strings.t('assist.ready'),
+      ConversationAssistPhase.initializing => strings.t('assist.initializing'),
+      ConversationAssistPhase.listening => strings.t('assist.listening'),
+      ConversationAssistPhase.understanding =>
+        strings.t('assist.understanding'),
+      ConversationAssistPhase.suggestions => strings.t('assist.readyAgain'),
+      ConversationAssistPhase.noSpeech => strings.t('assist.noSpeech'),
+      ConversationAssistPhase.unavailable => strings.t('assist.unavailable'),
+      ConversationAssistPhase.permissionDenied =>
+        strings.t('assist.permissionDenied'),
+      ConversationAssistPhase.error =>
+        controller.errorMessage ?? strings.t('assist.error'),
+    };
+    final retryable = phase == ConversationAssistPhase.noSpeech ||
+        phase == ConversationAssistPhase.error;
+
+    return Card(
+      color: listening ? theme.colorScheme.primaryContainer : null,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: <Widget>[
+            SizedBox(
+              width: 64,
+              height: 64,
+              child: FilledButton(
+                key: const Key('assist-listen'),
+                onPressed: phase == ConversationAssistPhase.initializing
+                    ? null
+                    : (listening ? onStop : (retryable ? onRetry : onListen)),
+                style: FilledButton.styleFrom(
+                  shape: const CircleBorder(),
+                  padding: EdgeInsets.zero,
+                ),
+                child: Icon(
+                  listening
+                      ? Icons.stop_rounded
+                      : (retryable ? Icons.refresh : Icons.mic_rounded),
+                  size: 30,
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    listening
+                        ? strings.t('assist.stop')
+                        : strings.t('assist.listen'),
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(status),
+                  if (listening) ...<Widget>[
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: null,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InputLanguageControl extends StatelessWidget {
+  const _InputLanguageControl({required this.controller});
+
+  final ConversationAssistController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    return Row(
+      children: <Widget>[
+        Text(strings.t('assist.inputLanguage')),
+        const SizedBox(width: 12),
+        Expanded(
+          child: DropdownButtonFormField<ConversationInputLanguage>(
+            value: controller.inputLanguage,
+            isExpanded: true,
+            decoration: const InputDecoration(isDense: true),
+            items: <DropdownMenuItem<ConversationInputLanguage>>[
+              for (final value in ConversationInputLanguage.values)
+                DropdownMenuItem(
+                  value: value,
+                  child: Text(strings.t('assist.language.${value.name}')),
+                ),
+            ],
+            onChanged: controller.isListening
+                ? null
+                : (value) {
+                    if (value != null) controller.setInputLanguage(value);
+                  },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PreferenceControls extends StatelessWidget {
+  const _PreferenceControls({
+    required this.preferences,
+    required this.onChanged,
+    required this.onAdultChanged,
+  });
+
+  final ConversationPreferences preferences;
+  final ValueChanged<ConversationPreferences> onChanged;
+  final ValueChanged<bool> onAdultChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    return SectionCard(
+      title: strings.t('assist.style'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final tone in ConversationToneBias.values)
+                ChoiceChip(
+                  label: Text(strings.t('assist.tone.${tone.name}')),
+                  selected: preferences.tone == tone,
+                  onSelected: (_) => onChanged(
+                    preferences.copyWith(tone: tone),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(strings.t('assist.boldness')),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final boldness in ConversationBoldness.values)
+                ChoiceChip(
+                  label: Text(strings.boldness(boldness)),
+                  selected: preferences.maxBoldness == boldness,
+                  onSelected: !preferences.adultContentEnabled &&
+                          boldness.index > ConversationBoldness.flirty.index
+                      ? null
+                      : (_) => onChanged(
+                            preferences.copyWith(maxBoldness: boldness),
+                          ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: Text(strings.t('assist.adultContent')),
+            subtitle: Text(strings.t('assist.adultContentHint')),
+            value: preferences.adultContentEnabled,
+            onChanged: onAdultChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Suggestions extends StatelessWidget {
+  const _Suggestions({required this.result, required this.onMore});
+
+  final ConversationSuggestionResult result;
+  final VoidCallback onMore;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                strings.t('assist.suggestions'),
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onMore,
+              icon: const Icon(Icons.refresh),
+              label: Text(strings.t('assist.more')),
+            ),
+          ],
+        ),
+        if (result.usedSafeFallback)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              strings.t('assist.safeFallback'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        if (result.lowRecognitionConfidence)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              strings.t('assist.lowConfidence'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+            ),
+          ),
+        for (var i = 0; i < result.suggestions.length; i++)
+          _SuggestionCard(
+            number: i + 1,
+            line: result.suggestions[i].line,
+          ),
+      ],
+    );
+  }
+}
+
+class _SuggestionCard extends StatelessWidget {
+  const _SuggestionCard({required this.number, required this.line});
+
+  final int number;
+  final OpenerLine line;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    final style = line.tones.contains(Tone.witty) ||
+            line.tones.contains(Tone.humorous)
+        ? strings.t('assist.tone.funny')
+        : line.tones.contains(Tone.flirty) || line.tones.contains(Tone.romantic)
+            ? strings.t('assist.tone.flirty')
+            : line.tones.contains(Tone.classy)
+                ? strings.t('assist.tone.gentleman')
+                : line.tones.contains(Tone.direct) ||
+                        line.tones.contains(Tone.suggestive)
+                    ? strings.t('assist.tone.bold')
+                    : strings.t('assist.style.natural');
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => LineDetailScreen(lineId: line.id),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              CircleAvatar(radius: 14, child: Text('$number')),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    LineText(line: line, selectable: false),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: <Widget>[
+                        MetaTag(style),
+                        if (line.usageType != null)
+                          MetaTag(strings.usageType(line.usageType!)),
+                        if (line.boldness != null)
+                          MetaTag(strings.boldness(line.boldness!)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: strings.t('assist.copy'),
+                onPressed: () => Clipboard.setData(
+                  ClipboardData(text: line.japaneseText),
+                ),
+                icon: const Icon(Icons.copy_outlined),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SessionHistory extends StatelessWidget {
+  const _SessionHistory({required this.turns});
+
+  final List<ConversationTurn> turns;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    return SectionCard(
+      title: strings.t('assist.sessionHistory'),
+      child: Column(
+        children: <Widget>[
+          for (final turn in turns)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.record_voice_over_outlined),
+              title: Text(turn.transcript, maxLines: 2),
+              trailing: Text(
+                strings.t('assist.detected.${turn.language.name}'),
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}

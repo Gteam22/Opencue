@@ -17,6 +17,7 @@ class AppSettings {
     this.radialHandedness = RadialHandedness.automatic,
     this.radialHapticsEnabled = true,
     this.radialTutorialSeen = false,
+    this.conversationAssistAdultContentEnabled = false,
     this.conversationLibraryVersion = 0,
   });
 
@@ -71,6 +72,10 @@ class AppSettings {
   /// settings, so this is a "seen" flag rather than a "disabled" one.
   final bool radialTutorialSeen;
 
+  /// Explicit opt-in for naughty/explicit Conversation Assist candidates.
+  /// Off by default and kept separate from the manual library's visibility.
+  final bool conversationAssistAdultContentEnabled;
+
   /// Internal content-migration marker. Not exposed as a preference.
   final int conversationLibraryVersion;
 
@@ -90,6 +95,7 @@ class AppSettings {
     RadialHandedness? radialHandedness,
     bool? radialHapticsEnabled,
     bool? radialTutorialSeen,
+    bool? conversationAssistAdultContentEnabled,
     int? conversationLibraryVersion,
   }) {
     return AppSettings(
@@ -111,6 +117,9 @@ class AppSettings {
       radialHapticsEnabled:
           radialHapticsEnabled ?? this.radialHapticsEnabled,
       radialTutorialSeen: radialTutorialSeen ?? this.radialTutorialSeen,
+      conversationAssistAdultContentEnabled:
+          conversationAssistAdultContentEnabled ??
+              this.conversationAssistAdultContentEnabled,
       conversationLibraryVersion:
           conversationLibraryVersion ?? this.conversationLibraryVersion,
     );
@@ -130,6 +139,8 @@ class AppSettings {
         'radialHandedness': radialHandedness.name,
         'radialHapticsEnabled': radialHapticsEnabled,
         'radialTutorialSeen': radialTutorialSeen,
+        'conversationAssistAdultContentEnabled':
+            conversationAssistAdultContentEnabled,
         'conversationLibraryVersion': conversationLibraryVersion,
       };
 
@@ -168,6 +179,8 @@ class AppSettings {
       // the `== true` shorthand the other flags use.
       radialHapticsEnabled: json['radialHapticsEnabled'] != false,
       radialTutorialSeen: json['radialTutorialSeen'] == true,
+      conversationAssistAdultContentEnabled:
+          json['conversationAssistAdultContentEnabled'] == true,
       conversationLibraryVersion:
           _nonNegativeInt(json['conversationLibraryVersion']),
     );
@@ -189,6 +202,8 @@ class AppSettings {
         'radialHandedness': radialHandedness.name,
         'radialHapticsEnabled': radialHapticsEnabled ? 'true' : 'false',
         'radialTutorialSeen': radialTutorialSeen ? 'true' : 'false',
+        'conversationAssistAdultContentEnabled':
+            conversationAssistAdultContentEnabled ? 'true' : 'false',
         'conversationLibraryVersion': '$conversationLibraryVersion',
       };
 
@@ -224,6 +239,8 @@ class AppSettings {
       ),
       radialHapticsEnabled: map['radialHapticsEnabled'] != 'false',
       radialTutorialSeen: map['radialTutorialSeen'] == 'true',
+      conversationAssistAdultContentEnabled:
+          map['conversationAssistAdultContentEnabled'] == 'true',
       conversationLibraryVersion:
           _nonNegativeInt(map['conversationLibraryVersion']),
     );
@@ -240,7 +257,9 @@ class AppSettings {
       other.defaultDirectness == defaultDirectness &&
       other.includeHistoryInExport == includeHistoryInExport &&
       other.developerMode == developerMode &&
-      other.retainScanImages == retainScanImages;
+      other.retainScanImages == retainScanImages &&
+      other.conversationAssistAdultContentEnabled ==
+          conversationAssistAdultContentEnabled;
 
   @override
   int get hashCode => Object.hash(
@@ -250,6 +269,7 @@ class AppSettings {
         includeHistoryInExport,
         developerMode,
         retainScanImages,
+        conversationAssistAdultContentEnabled,
       );
 }
 

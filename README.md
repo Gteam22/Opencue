@@ -1,12 +1,20 @@
 # OpenCue
 
+A multilingual conversation assistant and curated Japanese/Korean line library.
+Tap **Listen** for one short conversation turn and OpenCue transcribes it,
+detects Japanese, Korean or English, then suggests three relevant replies in
+your chosen output-language mode. Manual situation recommendations and the
+environmental Scan remain available as secondary tools.
+
 A personal library of Japanese conversation openers with an offline
 recommendation engine. You describe the situation you are actually in, and
 OpenCue suggests a few lines that fit it — or tells you that this is probably not
 a good moment to say anything.
 
-Everything runs locally. There is no account, no server, no camera, no
-microphone, and no network code anywhere in the application.
+There is no account or OpenCue server. Listening is deliberate rather than
+continuous, recognition requests on-device processing, and OpenCue never writes
+raw microphone audio to disk. Camera access is confined to the optional Scan
+tool.
 
 ---
 
@@ -16,6 +24,9 @@ microphone, and no network code anywhere in the application.
 
 - Holds a library of openers, each with the Japanese line and its English
   meaning, plus the situations it suits and the situations it does not.
+- Listens to one short incoming utterance after a tap and ranks approximately
+  three library-backed replies by meaning, topic, usage type, tone and the
+  user's manually selected boldness.
 - Lets you describe where you are and what you can see, and returns up to three
   suggestions: a **safest** one, a **playful** one and a **more direct** one.
 - Warns you, prominently, when the situation you described suggests approaching
@@ -31,9 +42,12 @@ microphone, and no network code anywhere in the application.
 - It never guarantees a reception, and it does not score or rate other people.
 - It stores nothing about anyone's appearance, availability, or interest — only
   the situation you typed in.
-- It has no camera or microphone access. A later version may read environmental
-  context from a camera or smart glasses; that would describe the *setting*, and
-  it would never claim to determine whether someone is interested or consenting.
+- It never listens continuously or in the background. Microphone access starts
+  only after **Listen**, and the transient transcript history is cleared when
+  the Conversation Assist screen closes.
+- Adult suggestions are off by default and never activate from time, place,
+  proximity or alcohol. They require explicit opt-in and a manual boldness
+  limit.
 
 ### Getting the installer
 
@@ -127,6 +141,19 @@ source; that prompt is expected for any app not from the Play Store.
 Requested the first time you open **Scan environment**, and only after a screen
 explaining what the camera is used for. Declining leaves everything else
 working: manual situation entry, the library and recommendations are unaffected.
+
+### Microphone permission
+
+Requested only after you tap **Listen** in Conversation Assist. The platform
+speech recognizer is configured for on-device recognition and short phrases;
+Japanese, Korean and English availability depends on the speech languages
+installed on the phone. Declining leaves transcript typing, the library, Scan
+and manual recommendations working.
+
+OpenCue receives partial/final transcript events and confidence from the device
+service. It does not create an audio file, retain raw audio, or keep listening
+after voice activity ends (about 1.4 seconds of silence) or the user taps Stop.
+The last five transcripts are memory-only context for follow-up turns.
 
 ### What the scan does and does not do
 
@@ -238,7 +265,24 @@ is production-ready.
 | `camera` | The Flutter team's own plugin, and the only one with a first-party Windows implementation, so declaring it does not put the desktop build at risk. |
 | `google_mlkit_image_labeling` | On-device labelling from the maintained `flutter-ml` wrapper, not the deprecated Firebase ML APIs. **Labelling only** — no face detection, no object detection, no OCR — because "what kind of place is this" is the only question asked. |
 | `permission_handler` | Distinguishes *denied* from *permanently denied*, which the camera plugin cannot, and which the two permission screens depend on. |
+| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for short, user-triggered phrases, partial results, sound-level events and JA/KO/EN locale selection. OpenCue requests on-device recognition and stores no audio. |
 | `sqflite` | The Android SQLite implementation. Same `sqflite_common` API as the desktop FFI build, so no repository code differs. |
+
+### Conversation Assist pipeline
+
+```text
+Listen tap -> platform speech recognizer -> sound-level VAD / final result
+           -> script language detection (JA / KO / EN)
+           -> multilingual intent + topic interpretation
+           -> adult/boldness safety filter
+           -> curated-library semantic ranking + repetition penalty
+           -> three response cards using the existing JP/KR/EN + TTS widgets
+```
+
+`ConversationRecognitionService` isolates platform capture, and
+`ConversationSuggestionProvider` is the seam for a future local model or
+fallback generator. The current provider is deterministic, fast and library
+backed; it does not call a paid API.
 
 ### Camera lifecycle
 
