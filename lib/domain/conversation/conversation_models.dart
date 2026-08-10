@@ -44,6 +44,19 @@ enum ConversationToneBias { natural, funny, flirty, gentleman, bold }
 
 enum SuggestionFeedbackKind { shown, accepted, dismissed }
 
+enum ConversationSpeaker { other, user }
+
+enum FinalizedUtteranceSource { speech, manual }
+
+enum ConversationMatcherKind { local, semantic, none }
+
+enum CueUpdateAction {
+  updated,
+  preservedIrrelevant,
+  preservedDuplicate,
+  preservedEmpty,
+}
+
 class ConversationInterpretation {
   const ConversationInterpretation({
     required this.language,
@@ -117,6 +130,7 @@ class ConversationSuggestionResult {
     required this.suggestions,
     this.usedSafeFallback = false,
     this.lowRecognitionConfidence = false,
+    this.candidateCount = 0,
   });
 
   final String transcript;
@@ -124,6 +138,7 @@ class ConversationSuggestionResult {
   final List<ConversationSuggestion> suggestions;
   final bool usedSafeFallback;
   final bool lowRecognitionConfidence;
+  final int candidateCount;
 }
 
 class ConversationTurn {
@@ -131,10 +146,46 @@ class ConversationTurn {
     required this.transcript,
     required this.language,
     required this.createdAt,
+    this.id,
+    this.speaker = ConversationSpeaker.other,
+    this.detectedIntent,
+    this.confidence,
   });
 
+  final String? id;
   final String transcript;
   final DetectedLanguage language;
+  final DateTime createdAt;
+  final ConversationSpeaker speaker;
+  final String? detectedIntent;
+  final double? confidence;
+}
+
+class ConversationPipelineDiagnostics {
+  const ConversationPipelineDiagnostics({
+    required this.rawTranscript,
+    required this.normalizedTranscript,
+    required this.finalized,
+    required this.intentId,
+    required this.confidence,
+    required this.matcher,
+    required this.responsesFound,
+    required this.responsesDisplayed,
+    required this.action,
+    required this.source,
+    required this.createdAt,
+  });
+
+  final String rawTranscript;
+  final String normalizedTranscript;
+  final bool finalized;
+  final String intentId;
+  final double confidence;
+  final ConversationMatcherKind matcher;
+  final int responsesFound;
+  final int responsesDisplayed;
+  final CueUpdateAction action;
+  final FinalizedUtteranceSource source;
   final DateTime createdAt;
 }
 

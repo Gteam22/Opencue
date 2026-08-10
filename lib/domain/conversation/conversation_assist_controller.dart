@@ -6,6 +6,9 @@ import '../models/opener_line.dart';
 import 'conversation_models.dart';
 import 'conversation_recognition_service.dart';
 import 'conversation_response_engine.dart';
+import 'language_detector.dart';
+import 'semantic_intent_classifier.dart';
+import 'transcript_normalizer.dart';
 import 'voice_activity_tracker.dart';
 
 enum ConversationAssistPhase {
@@ -24,12 +27,19 @@ class ConversationAssistController extends ChangeNotifier {
   ConversationAssistController({
     required ConversationRecognitionService recognition,
     this.responseEngine = const ConversationResponseEngine(),
+    this.semanticClassifier =
+        const NullConversationSemanticIntentClassifier(),
+    this.normalizer = const TranscriptNormalizer(),
+    this.languageDetector = const ConversationLanguageDetector(),
     VoiceActivityTracker? voiceActivity,
   })  : _recognition = recognition,
         voiceActivity = voiceActivity ?? VoiceActivityTracker();
 
   final ConversationRecognitionService _recognition;
   final ConversationSuggestionProvider responseEngine;
+  final ConversationSemanticIntentClassifier semanticClassifier;
+  final TranscriptNormalizer normalizer;
+  final ConversationLanguageDetector languageDetector;
   final VoiceActivityTracker voiceActivity;
 
   ConversationAssistPhase _phase = ConversationAssistPhase.idle;
@@ -54,8 +64,15 @@ class ConversationAssistController extends ChangeNotifier {
   double? _sourceConfidence;
   bool _closed = false;
   DateTime? _listeningStartedAt;
+  ConversationPipelineDiagnostics? _diagnostics;
+  String? _lastFinalizedNormalized;
+  DateTime? _lastFinalizedAt;
+  String? _activeCueTranscript;
+  int _cueRevision = 0;
 
   static const Duration noSpeechTimeout = Duration(seconds: 10);
+  static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
+  static const double semanticFallbackThreshold = 0.62;
 
   ConversationAssistPhase get phase => _phase;
   String get transcript => _transcript;
@@ -66,6 +83,8 @@ class ConversationAssistController extends ChangeNotifier {
   List<ConversationTurn> get history => List.unmodifiable(_history);
   List<ConversationSuggestionFeedback> get feedback =>
       List.unmodifiable(_feedback);
+  ConversationPipelineDiagnostics? get diagnostics => _diagnostics;
+  int get cueRevision => _cueRevision;
   bool get isListening => _phase == ConversationAssistPhase.listening;
 
   Future<void> prepare() async {
@@ -99,7 +118,6 @@ class ConversationAssistController extends ChangeNotifier {
     this.preferences = preferences;
     _transcript = '';
     _confidence = 0;
-    _result = null;
     _errorMessage = null;
     _finalizing = false;
     voiceActivity.reset();
@@ -125,13 +143,8 @@ class ConversationAssistController extends ChangeNotifier {
   }
 
   Future<void> stop() async {
-    if (!isListening) return;
-    _vadTimer?.cancel();
-    await _recognition.stop();
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-    if (_phase == ConversationAssistPhase.listening) {
-      await _finalizeTranscript();
-    }
+    if (!isListening || _finalizing) return;
+    await _finalizeTranscript();
   }
 
   Future<void> cancel() async {
@@ -148,74 +161,258 @@ class ConversationAssistController extends ChangeNotifier {
   void setPreferences(ConversationPreferences value) {
     preferences = value;
     notifyListeners();
-    if (_transcript.trim().isNotEmpty && _library.isNotEmpty) {
-      suggestFromText(
-        _transcript,
-        library: _library,
-        preferences: value,
-        recordTurn: false,
-        transcriptionConfidence: _sourceConfidence,
-      );
-    }
+    _rerankActiveCue();
   }
 
-  void suggestFromText(
+  /// The single entry point for completed speech and confirmed manual edits.
+  /// Partial recognition updates never call this method.
+  Future<bool> onUtteranceFinalized(
     String text, {
     required List<OpenerLine> library,
     required ConversationPreferences preferences,
-    bool recordTurn = true,
+    FinalizedUtteranceSource source = FinalizedUtteranceSource.manual,
     double? transcriptionConfidence,
-  }) {
+  }) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty) {
-      _transcript = '';
-      _result = null;
-      _setPhase(ConversationAssistPhase.noSpeech);
-      return;
-    }
+    final normalized = normalizer.normalize(trimmed);
+    final now = DateTime.now().toUtc();
     _library = library;
     this.preferences = preferences;
-    if (recordTurn) _sourceConfidence = transcriptionConfidence;
     _transcript = trimmed;
+
+    if (trimmed.isEmpty) {
+      _diagnostics = ConversationPipelineDiagnostics(
+        rawTranscript: text,
+        normalizedTranscript: normalized,
+        finalized: true,
+        intentId: 'no_action',
+        confidence: 0,
+        matcher: ConversationMatcherKind.none,
+        responsesFound: 0,
+        responsesDisplayed: _result?.suggestions.length ?? 0,
+        action: CueUpdateAction.preservedEmpty,
+        source: source,
+        createdAt: now,
+      );
+      _setPhase(_result == null
+          ? ConversationAssistPhase.noSpeech
+          : ConversationAssistPhase.suggestions);
+      return false;
+    }
+
+    final lastAt = _lastFinalizedAt;
+    final duplicate = normalized == _lastFinalizedNormalized &&
+        lastAt != null &&
+        now.difference(lastAt) <= duplicateSuppressionWindow;
+    if (duplicate) {
+      _diagnostics = ConversationPipelineDiagnostics(
+        rawTranscript: trimmed,
+        normalizedTranscript: normalized,
+        finalized: true,
+        intentId: _result?.interpretation.primaryIntentId ?? 'unknown',
+        confidence: _result?.interpretation.intentConfidence ?? 0,
+        matcher: ConversationMatcherKind.none,
+        responsesFound: _result?.candidateCount ?? 0,
+        responsesDisplayed: _result?.suggestions.length ?? 0,
+        action: CueUpdateAction.preservedDuplicate,
+        source: source,
+        createdAt: now,
+      );
+      _setPhase(_result == null
+          ? ConversationAssistPhase.idle
+          : ConversationAssistPhase.suggestions);
+      return false;
+    }
+    _lastFinalizedNormalized = normalized;
+    _lastFinalizedAt = now;
+
+    if (_isNoAction(normalized)) {
+      _recordTurn(
+        transcript: trimmed,
+        language: languageDetector.detect(trimmed),
+        intentId: 'no_action',
+        confidence: 1,
+        createdAt: now,
+      );
+      _diagnostics = ConversationPipelineDiagnostics(
+        rawTranscript: trimmed,
+        normalizedTranscript: normalized,
+        finalized: true,
+        intentId: 'no_action',
+        confidence: 1,
+        matcher: ConversationMatcherKind.local,
+        responsesFound: 0,
+        responsesDisplayed: _result?.suggestions.length ?? 0,
+        action: CueUpdateAction.preservedIrrelevant,
+        source: source,
+        createdAt: now,
+      );
+      _setPhase(_result == null
+          ? ConversationAssistPhase.idle
+          : ConversationAssistPhase.suggestions);
+      return false;
+    }
+
     _setPhase(ConversationAssistPhase.understanding);
     final withRecent = preferences.copyWith(
       recentLineIds: _recentLineIds.toSet(),
     );
-    _result = responseEngine.suggest(
+    var nextResult = responseEngine.suggest(
       transcript: trimmed,
       library: library,
       preferences: withRecent,
       history: _history,
-      transcriptionConfidence: transcriptionConfidence ?? _sourceConfidence,
+      transcriptionConfidence: transcriptionConfidence,
     );
-    final ids = _result!.suggestions.map((item) => item.line.id);
+
+    var matcher = nextResult.interpretation.primaryIntent == null
+        ? ConversationMatcherKind.none
+        : ConversationMatcherKind.local;
+    var relevant = _isRelevant(nextResult);
+    if (!relevant) {
+      SemanticIntentClassification? semantic;
+      try {
+        semantic = await semanticClassifier.classify(
+          transcript: trimmed,
+          recentTurns: List<ConversationTurn>.unmodifiable(_history),
+        );
+      } on Object catch (error) {
+        _errorMessage = 'Semantic classifier: $error';
+      }
+      if (semantic != null &&
+          semantic.confidence >= semanticFallbackThreshold) {
+        final semanticResult = responseEngine.suggest(
+          transcript: trimmed,
+          library: library,
+          preferences: withRecent,
+          history: _history,
+          transcriptionConfidence: transcriptionConfidence,
+          semanticIntentId: semantic.intentId,
+          semanticConfidence: semantic.confidence,
+        );
+        if (_isRelevant(semanticResult)) {
+          nextResult = semanticResult;
+          relevant = true;
+          matcher = ConversationMatcherKind.semantic;
+        }
+      }
+    }
+
+    final intentId = relevant
+        ? nextResult.interpretation.primaryIntentId!
+        : 'unknown';
+    _recordTurn(
+      transcript: trimmed,
+      language: nextResult.interpretation.language,
+      intentId: relevant ? intentId : null,
+      confidence: nextResult.interpretation.intentConfidence,
+      createdAt: now,
+    );
+    if (relevant) {
+      _result = nextResult;
+      _activeCueTranscript = trimmed;
+      _sourceConfidence = transcriptionConfidence;
+      _cueRevision++;
+      final ids = nextResult.suggestions.map((item) => item.line.id);
+      _remember(ids);
+      for (final id in ids) {
+        _recordFeedback(id, SuggestionFeedbackKind.shown);
+      }
+    }
+
+    _diagnostics = ConversationPipelineDiagnostics(
+      rawTranscript: trimmed,
+      normalizedTranscript: normalized,
+      finalized: true,
+      intentId: intentId,
+      confidence: nextResult.interpretation.intentConfidence,
+      matcher: relevant ? matcher : ConversationMatcherKind.none,
+      responsesFound: relevant ? nextResult.candidateCount : 0,
+      responsesDisplayed: _result?.suggestions.length ?? 0,
+      action: relevant
+          ? CueUpdateAction.updated
+          : CueUpdateAction.preservedIrrelevant,
+      source: source,
+      createdAt: now,
+    );
+    _setPhase(_result == null
+        ? ConversationAssistPhase.idle
+        : ConversationAssistPhase.suggestions);
+    return relevant;
+  }
+
+  void more() {
+    _rerankActiveCue();
+  }
+
+  void _rerankActiveCue() {
+    final active = _activeCueTranscript;
+    if (active == null || active.isEmpty || _library.isEmpty) return;
+    final next = responseEngine.suggest(
+      transcript: active,
+      library: _library,
+      preferences: preferences.copyWith(
+        recentLineIds: _recentLineIds.toSet(),
+      ),
+      history: _history,
+      transcriptionConfidence: _sourceConfidence,
+    );
+    if (!_isRelevant(next)) return;
+    _result = next;
+    _cueRevision++;
+    final ids = next.suggestions.map((item) => item.line.id);
     _remember(ids);
     for (final id in ids) {
       _recordFeedback(id, SuggestionFeedbackKind.shown);
     }
-    if (recordTurn) {
-      _history.insert(
-        0,
-        ConversationTurn(
-          transcript: trimmed,
-          language: _result!.interpretation.language,
-          createdAt: DateTime.now().toUtc(),
-        ),
-      );
-      if (_history.length > 5) _history.removeRange(5, _history.length);
-    }
     _setPhase(ConversationAssistPhase.suggestions);
   }
 
-  void more() {
-    if (_transcript.isEmpty || _library.isEmpty) return;
-    suggestFromText(
-      _transcript,
-      library: _library,
-      preferences: preferences,
-      recordTurn: false,
-      transcriptionConfidence: _sourceConfidence,
+  bool _isRelevant(ConversationSuggestionResult candidate) {
+    final intent = candidate.interpretation.primaryIntent;
+    return intent != null &&
+        intent.confidence >= intent.definition.confidenceThreshold &&
+        !candidate.lowRecognitionConfidence &&
+        candidate.suggestions.isNotEmpty;
+  }
+
+  bool _isNoAction(String normalized) => const <String>{
+        'ありがとう',
+        'ありがとうございます',
+        'すみません',
+        'ごめん',
+        'うん',
+        'はい',
+        'そうですね',
+        'そうだね',
+        'thankyou',
+        'thanks',
+        'yes',
+        'yeah',
+        '네',
+        '응',
+        '감사합니다',
+      }.contains(normalized);
+
+  void _recordTurn({
+    required String transcript,
+    required DetectedLanguage language,
+    required String? intentId,
+    required double confidence,
+    required DateTime createdAt,
+  }) {
+    _history.insert(
+      0,
+      ConversationTurn(
+        id: 'turn-${createdAt.microsecondsSinceEpoch}-${_history.length}',
+        transcript: transcript,
+        language: language,
+        createdAt: createdAt,
+        detectedIntent: intentId,
+        confidence: confidence,
+      ),
     );
+    if (_history.length > 6) _history.removeRange(6, _history.length);
   }
 
   SuggestionFeedbackKind? feedbackFor(String lineId) =>
@@ -235,7 +432,7 @@ class ConversationAssistController extends ChangeNotifier {
 
   void _recordFeedback(String lineId, SuggestionFeedbackKind kind) {
     _feedback.add(ConversationSuggestionFeedback(
-      transcript: _transcript,
+      transcript: _activeCueTranscript ?? _transcript,
       intentId: _result?.interpretation.primaryIntentId,
       lineId: lineId,
       kind: kind,
@@ -251,17 +448,22 @@ class ConversationAssistController extends ChangeNotifier {
     if (_finalizing) return;
     _finalizing = true;
     _vadTimer?.cancel();
-    if (_transcript.trim().isEmpty) {
-      _setPhase(ConversationAssistPhase.noSpeech);
-    } else {
-      suggestFromText(
+    try {
+      await _recognition.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await onUtteranceFinalized(
         _transcript,
         library: _library,
         preferences: preferences,
+        source: FinalizedUtteranceSource.speech,
         transcriptionConfidence: _confidence,
       );
+    } on Object catch (error) {
+      _errorMessage = '$error';
+      _setPhase(ConversationAssistPhase.error);
+    } finally {
+      _finalizing = false;
     }
-    _finalizing = false;
   }
 
   void _onRecognitionResult(String text, bool isFinal, double confidence) {

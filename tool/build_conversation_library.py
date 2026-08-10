@@ -147,6 +147,11 @@ def usage_for(section, english, category):
 
 
 def tones_for(section, category, english):
+    if 'core cue responses' in section.lower():
+        tones = {'friendly'}
+        if any(word in english.lower() for word in ('interview', 'why', 'guess')):
+            tones.add('playful')
+        return sorted(tones)
     tones = {'flirty'}
     if category in ('playful', 'witty', 'games', 'comebacks'):
         tones.add('playful')
@@ -186,6 +191,10 @@ TOPIC_WORDS = {
 def topics_for(section, category, english):
     low = (section + ' ' + english).lower()
     topics = {category}
+    if 'relationship status' in low:
+        topics.update(('relationships', 'dating'))
+    if 'time in japan' in low:
+        topics.update(('travel', 'japanese'))
     for topic, words in TOPIC_WORDS.items():
         if any(word in low for word in words):
             topics.add(topic)

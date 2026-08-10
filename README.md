@@ -153,7 +153,13 @@ and manual recommendations working.
 OpenCue receives partial/final transcript events and confidence from the device
 service. It does not create an audio file, retain raw audio, or keep listening
 after voice activity ends (about 3.4 seconds of silence) or the user taps Stop.
-The last five transcripts are memory-only context for follow-up turns.
+Partial text updates only the visible transcript. A provider final event,
+provider stop event, VAD stop, or manual transcript confirmation all converge
+on the same finalized-utterance pipeline, which normalizes, classifies and
+replaces the cue set automatically. Duplicate finals and low-value acknowledgments
+preserve the existing cues. A platform confidence of zero is treated as
+unavailable rather than as failed recognition. The last six finalized turns are
+memory-only context for follow-up turns.
 
 ### What the scan does and does not do
 

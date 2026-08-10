@@ -77,12 +77,14 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
     );
   }
 
-  void _suggestEditedText() {
-    _controller.suggestFromText(
+  Future<void> _suggestEditedText() async {
+    await _controller.onUtteranceFinalized(
       _transcript.text,
       library: AppScope.read(context).lines,
       preferences: _preferences,
+      source: FinalizedUtteranceSource.manual,
     );
+    if (!mounted) return;
     FocusScope.of(context).unfocus();
   }
 
@@ -152,6 +154,13 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
                     onDismissed: (line) =>
                         _controller.dismissSuggestion(line.id),
                   ),
+                if (AppScope.of(context).settings.developerMode &&
+                    _controller.diagnostics != null) ...<Widget>[
+                  const SizedBox(height: 20),
+                  _PipelineDiagnosticsCard(
+                    diagnostics: _controller.diagnostics!,
+                  ),
+                ],
                 if (_controller.history.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 20),
                   _SessionHistory(turns: _controller.history),
@@ -449,6 +458,23 @@ class _Suggestions extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
+        Text(
+          strings.f('assist.cuesFor', <Object?>[result.transcript]),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (result.interpretation.primaryIntent != null)
+          Text(
+            strings.f(
+              'assist.understoodAs',
+              <Object?>[
+                result.interpretation.primaryIntent!.definition.description,
+              ],
+            ),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        const SizedBox(height: 8),
         Row(
           children: <Widget>[
             Expanded(
@@ -491,6 +517,53 @@ class _Suggestions extends StatelessWidget {
             onDismissed: onDismissed,
           ),
       ],
+    );
+  }
+}
+
+class _PipelineDiagnosticsCard extends StatelessWidget {
+  const _PipelineDiagnosticsCard({required this.diagnostics});
+
+  final ConversationPipelineDiagnostics diagnostics;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppScope.strings(context);
+    final values = <(String, String)>[
+      ('Raw transcript', diagnostics.rawTranscript),
+      ('Normalized', diagnostics.normalizedTranscript),
+      ('Finalized', '${diagnostics.finalized}'),
+      ('Intent', diagnostics.intentId),
+      ('Confidence', diagnostics.confidence.toStringAsFixed(2)),
+      ('Matcher', diagnostics.matcher.name),
+      ('Responses found', '${diagnostics.responsesFound}'),
+      ('Displayed', '${diagnostics.responsesDisplayed}'),
+      ('Action', diagnostics.action.name),
+      ('Source', diagnostics.source.name),
+    ];
+    return SectionCard(
+      title: strings.t('assist.pipelineDiagnostics'),
+      child: Column(
+        children: <Widget>[
+          for (final value in values)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  SizedBox(
+                    width: 116,
+                    child: Text(
+                      value.$1,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ),
+                  Expanded(child: SelectableText(value.$2)),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

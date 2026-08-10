@@ -17,6 +17,8 @@ class ConversationInterpreter {
   ConversationInterpretation interpret(
     String transcript, {
     List<ConversationTurn> history = const <ConversationTurn>[],
+    String? semanticIntentId,
+    double? semanticConfidence,
   }) {
     final normalized = transcript.toLowerCase().trim();
     final context = <String>[
@@ -31,7 +33,23 @@ class ConversationInterpreter {
           .take(5)
           .map((turn) => turn.transcript)
           .toList(growable: false),
-    );
+    ).toList();
+    if (semanticIntentId != null && semanticConfidence != null) {
+      for (final definition in intentMatcher.catalog) {
+        if (definition.id != semanticIntentId) continue;
+        intentMatches.removeWhere((match) => match.id == semanticIntentId);
+        intentMatches.insert(
+          0,
+          ConversationIntentMatch(
+            definition: definition,
+            confidence:
+                semanticConfidence.clamp(0.0, 1.0).toDouble(),
+            reasons: const <String>['semanticClassifier'],
+          ),
+        );
+        break;
+      }
+    }
 
     void intent(ConversationIntent value, List<String> terms) {
       if (_hasAny(context, terms)) intents.add(value);

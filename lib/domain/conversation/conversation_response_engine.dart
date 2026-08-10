@@ -14,6 +14,8 @@ abstract interface class ConversationSuggestionProvider {
     List<ConversationTurn> history = const <ConversationTurn>[],
     int limit = 3,
     double? transcriptionConfidence,
+    String? semanticIntentId,
+    double? semanticConfidence,
   });
 }
 
@@ -34,8 +36,15 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
     List<ConversationTurn> history = const <ConversationTurn>[],
     int limit = 3,
     double? transcriptionConfidence,
+    String? semanticIntentId,
+    double? semanticConfidence,
   }) {
-    final interpretation = interpreter.interpret(transcript, history: history);
+    final interpretation = interpreter.interpret(
+      transcript,
+      history: history,
+      semanticIntentId: semanticIntentId,
+      semanticConfidence: semanticConfidence,
+    );
     final ranked = <ConversationSuggestion>[];
     for (final line in library) {
       if (!_allowed(line, preferences)) continue;
@@ -50,7 +59,9 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
     final selected = _selectDiverse(ranked, limit);
     var usedFallback = false;
     final lowRecognitionConfidence = transcriptionConfidence != null &&
-        transcriptionConfidence >= 0 &&
+        // speech_to_text uses 0 when a platform supplies no confidence.
+        // Treat only a real, positive score as confidence evidence.
+        transcriptionConfidence > 0 &&
         transcriptionConfidence < 0.45;
     final uncertainIntent = interpretation.primaryIntent == null &&
         interpretation.confidence < 0.5;
@@ -76,6 +87,8 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
       suggestions: selected.take(limit).toList(growable: false),
       usedSafeFallback: usedFallback,
       lowRecognitionConfidence: lowRecognitionConfidence,
+      candidateCount:
+          ranked.length > selected.length ? ranked.length : selected.length,
     );
   }
 

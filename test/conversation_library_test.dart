@@ -14,7 +14,7 @@ void main() {
 
   group('generated conversation dataset', () {
     test('loads all normalized multilingual records with unique ids', () {
-      expect(lines, hasLength(329));
+      expect(lines, hasLength(335));
       expect(lines.map((line) => line.id).toSet(), hasLength(lines.length));
       for (final line in lines) {
         expect(line.japaneseText.trim(), isNotEmpty, reason: line.id);
@@ -41,11 +41,11 @@ void main() {
       expect(category(LineCategory.intimate), 50);
       expect(category(LineCategory.kissing), 31);
       expect(category(LineCategory.naughty), 20);
-      expect(category(LineCategory.playful), 12);
+      expect(category(LineCategory.playful), 18);
       expect(category(LineCategory.questions), 13);
       expect(category(LineCategory.witty), 52);
 
-      expect(boldness(ConversationBoldness.light), 35);
+      expect(boldness(ConversationBoldness.light), 41);
       expect(boldness(ConversationBoldness.flirty), 185);
       expect(boldness(ConversationBoldness.naughty), 73);
       expect(boldness(ConversationBoldness.explicit), 36);

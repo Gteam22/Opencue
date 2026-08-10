@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:opencue/data/seed/conversation_seed_loader.dart';
 import 'package:opencue/domain/enums/enums.dart';
 import 'package:opencue/domain/models/app_settings.dart';
 import 'package:opencue/domain/models/opener_line.dart';
@@ -11,7 +12,26 @@ import '../lib/domain/conversation/conversation_models.dart';
 import '../lib/domain/conversation/conversation_recognition_service.dart';
 import '../lib/domain/conversation/conversation_response_engine.dart';
 import '../lib/domain/conversation/language_detector.dart';
+import '../lib/domain/conversation/semantic_intent_classifier.dart';
 import '../lib/domain/conversation/voice_activity_tracker.dart';
+
+class FakeSemanticClassifier
+    implements ConversationSemanticIntentClassifier {
+  const FakeSemanticClassifier(this.intentId, this.confidence);
+
+  final String intentId;
+  final double confidence;
+
+  @override
+  Future<SemanticIntentClassification?> classify({
+    required String transcript,
+    required List<ConversationTurn> recentTurns,
+  }) async =>
+      SemanticIntentClassification(
+        intentId: intentId,
+        confidence: confidence,
+      );
+}
 
 void main() {
   test('adult assist opt-in is off by default and persists explicitly', () {
@@ -68,7 +88,7 @@ void main() {
 
     test('recognizes relationship, teasing, availability and invitation', () {
       expect(matcher.match('彼女いるの？').first.id,
-          'ask_relationship_status');
+          'relationship_status');
       expect(matcher.match('モテそう').first.id, 'tease_popular');
       expect(matcher.match('今週末何してる？').first.id,
           'ask_weekend_plans');
@@ -79,7 +99,7 @@ void main() {
       final result = interpreter.interpret(
         '日本語上手ですね。日本にどのくらいいるんですか？',
       );
-      expect(result.primaryIntentId, 'ask_time_in_japan');
+      expect(result.primaryIntentId, 'time_in_japan');
       expect(result.isQuestion, isTrue);
     });
 
@@ -207,6 +227,16 @@ void main() {
       expect(result.suggestions.first.line.id, 'seed-universal-10');
     });
 
+    test('zero STT confidence means unavailable, not low confidence', () {
+      final result = engine.suggest(
+        transcript: 'Do you like kissing?',
+        library: <OpenerLine>[safe, funny],
+        transcriptionConfidence: 0,
+      );
+      expect(result.lowRecognitionConfidence, isFalse);
+      expect(result.interpretation.primaryIntent, isNotNull);
+    });
+
     test('live results never exceed three cards', () {
       final lines = <OpenerLine>[
         safe,
@@ -229,6 +259,210 @@ void main() {
         result.suggestions.map((item) => item.line.id).toSet().length,
         result.suggestions.length,
       );
+    });
+  });
+
+  group('finalized utterance pipeline', () {
+    final timeReply = OpenerLine(
+      id: 'time-reply',
+      japaneseText: 'もう三年くらいだよ。',
+      englishMeaning: 'About three years now.',
+      tones: const <Tone>{Tone.friendly},
+      usageType: ConversationUsageType.statement,
+      topics: const <String>{'travel', 'japanese'},
+    );
+    final relationshipReply = OpenerLine(
+      id: 'relationship-reply',
+      japaneseText: '今はいないですよ。',
+      englishMeaning: 'I am not seeing anyone right now.',
+      tones: const <Tone>{Tone.friendly},
+      usageType: ConversationUsageType.statement,
+      topics: const <String>{'relationships', 'dating'},
+    );
+
+    test('Japan-duration variants automatically replace cue state', () async {
+      final controller = ConversationAssistController(
+        recognition: const NullConversationRecognitionService(),
+      );
+      addTearDown(controller.dispose);
+      final library = <OpenerLine>[timeReply, relationshipReply];
+
+      final first = await controller.onUtteranceFinalized(
+        '日本に来てどのくらいですか？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      expect(first, isTrue);
+      expect(controller.result!.interpretation.primaryIntentId,
+          'time_in_japan');
+      expect(controller.result!.suggestions, isNotEmpty);
+
+      final second = await controller.onUtteranceFinalized(
+        '日本何年目ですか？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      expect(second, isTrue);
+      expect(controller.result!.interpretation.primaryIntentId,
+          'time_in_japan');
+      expect(controller.cueRevision, 2);
+    });
+
+    test('relationship variants select relationship response family',
+        () async {
+      final controller = ConversationAssistController(
+        recognition: const NullConversationRecognitionService(),
+      );
+      addTearDown(controller.dispose);
+      final library = <OpenerLine>[timeReply, relationshipReply];
+
+      await controller.onUtteranceFinalized(
+        '彼女いますか？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      expect(controller.result!.interpretation.primaryIntentId,
+          'relationship_status');
+      expect(controller.result!.suggestions.first.line.id,
+          'relationship-reply');
+
+      await controller.onUtteranceFinalized(
+        '今フリー？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      expect(controller.result!.interpretation.primaryIntentId,
+          'relationship_status');
+    });
+
+    test('installed library contains speakable relationship replies', () {
+      final library = const ConversationSeedLoader().load(
+        createdAt: DateTime.utc(2026),
+      );
+      final result = const ConversationResponseEngine().suggest(
+        transcript: '彼女いるんですか？',
+        library: library,
+      );
+      expect(result.interpretation.primaryIntentId, 'relationship_status');
+      expect(
+        result.suggestions.map((item) => item.line.japaneseText),
+        contains('今はいないですよ。'),
+      );
+    });
+
+    test('no-action speech preserves the existing cue set', () async {
+      final controller = ConversationAssistController(
+        recognition: const NullConversationRecognitionService(),
+      );
+      addTearDown(controller.dispose);
+      final library = <OpenerLine>[timeReply, relationshipReply];
+      await controller.onUtteranceFinalized(
+        '彼女いますか？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      final previous = controller.result;
+      final revision = controller.cueRevision;
+
+      final updated = await controller.onUtteranceFinalized(
+        'ありがとう',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      expect(updated, isFalse);
+      expect(controller.result, same(previous));
+      expect(controller.cueRevision, revision);
+      expect(controller.diagnostics!.intentId, 'no_action');
+      expect(controller.diagnostics!.action,
+          CueUpdateAction.preservedIrrelevant);
+    });
+
+    test('duplicate final results update cues only once', () async {
+      final controller = ConversationAssistController(
+        recognition: const NullConversationRecognitionService(),
+      );
+      addTearDown(controller.dispose);
+      final library = <OpenerLine>[relationshipReply];
+      await controller.onUtteranceFinalized(
+        '彼女いますか？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      final firstRevision = controller.cueRevision;
+      final duplicate = await controller.onUtteranceFinalized(
+        '彼女いますか？',
+        library: library,
+        preferences: const ConversationPreferences(),
+      );
+      expect(duplicate, isFalse);
+      expect(controller.cueRevision, firstRevision);
+      expect(controller.diagnostics!.action,
+          CueUpdateAction.preservedDuplicate);
+    });
+
+    test('manual submission uses the finalized utterance pipeline', () async {
+      final controller = ConversationAssistController(
+        recognition: const NullConversationRecognitionService(),
+      );
+      addTearDown(controller.dispose);
+      await controller.onUtteranceFinalized(
+        '今フリー？',
+        library: <OpenerLine>[relationshipReply],
+        preferences: const ConversationPreferences(),
+        source: FinalizedUtteranceSource.manual,
+      );
+      expect(controller.result!.interpretation.primaryIntentId,
+          'relationship_status');
+      expect(controller.diagnostics!.source,
+          FinalizedUtteranceSource.manual);
+      expect(controller.diagnostics!.action, CueUpdateAction.updated);
+    });
+
+    test('semantic fallback can supply a structured catalog intent', () async {
+      final controller = ConversationAssistController(
+        recognition: const NullConversationRecognitionService(),
+        semanticClassifier: const FakeSemanticClassifier(
+          'relationship_status',
+          0.91,
+        ),
+      );
+      addTearDown(controller.dispose);
+      await controller.onUtteranceFinalized(
+        '交際状況を教えて',
+        library: <OpenerLine>[relationshipReply],
+        preferences: const ConversationPreferences(),
+      );
+      expect(controller.result!.interpretation.primaryIntentId,
+          'relationship_status');
+      expect(controller.diagnostics!.matcher,
+          ConversationMatcherKind.semantic);
+    });
+
+    test('partial STT updates call the response engine only after finalization',
+        () async {
+      final recognition = FakeConversationRecognitionService();
+      final provider = CountingSuggestionProvider();
+      final controller = ConversationAssistController(
+        recognition: recognition,
+        responseEngine: provider,
+      );
+      addTearDown(controller.dispose);
+      await controller.start(
+        library: <OpenerLine>[relationshipReply],
+        preferences: const ConversationPreferences(),
+      );
+
+      recognition.result('彼女', false, 0);
+      recognition.result('彼女いる', false, 0);
+      recognition.result('彼女いるん', false, 0);
+      expect(provider.callCount, 0);
+      recognition.result('彼女いるんですか', true, 0);
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+
+      expect(provider.callCount, 1);
+      expect(controller.cueRevision, 1);
+      expect(controller.result!.interpretation.primaryIntentId,
+          'relationship_status');
     });
   });
 
@@ -272,12 +506,12 @@ void main() {
       library: <OpenerLine>[reply],
       preferences: const ConversationPreferences(),
     );
-    recognition.result('週末は何をするの？', false, 0.4);
+    recognition.result('今週末何してる？', false, 0.4);
     expect(controller.transcript, contains('週末'));
     expect(controller.result, isNull);
     expect(controller.phase, ConversationAssistPhase.listening);
-    recognition.result('週末は何をするの？', true, 0.9);
-    await Future<void>.delayed(Duration.zero);
+    recognition.result('今週末何してる？', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 180));
 
     expect(controller.phase, ConversationAssistPhase.suggestions);
     expect(controller.result, isNotNull);
@@ -360,5 +594,35 @@ class FakeConversationRecognitionService
   Future<void> dispose() async {
     started = false;
     disposeCount++;
+  }
+}
+
+class CountingSuggestionProvider implements ConversationSuggestionProvider {
+  final ConversationResponseEngine _delegate =
+      const ConversationResponseEngine();
+  int callCount = 0;
+
+  @override
+  ConversationSuggestionResult suggest({
+    required String transcript,
+    required List<OpenerLine> library,
+    ConversationPreferences preferences = const ConversationPreferences(),
+    List<ConversationTurn> history = const <ConversationTurn>[],
+    int limit = 3,
+    double? transcriptionConfidence,
+    String? semanticIntentId,
+    double? semanticConfidence,
+  }) {
+    callCount++;
+    return _delegate.suggest(
+      transcript: transcript,
+      library: library,
+      preferences: preferences,
+      history: history,
+      limit: limit,
+      transcriptionConfidence: transcriptionConfidence,
+      semanticIntentId: semanticIntentId,
+      semanticConfidence: semanticConfidence,
+    );
   }
 }

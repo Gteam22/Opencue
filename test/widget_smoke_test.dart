@@ -163,7 +163,7 @@ void main() {
         preload: <OpenerLine>[line('mine', japanese: '自分の一言。')],
       );
       expect(state.lines.where((line) => !line.manualOnly), hasLength(1));
-      expect(state.lines.where((line) => line.manualOnly), hasLength(329));
+      expect(state.lines.where((line) => line.manualOnly), hasLength(335));
       expect(find.text(stringsEn['home.findLine']!), findsOneWidget);
     });
 

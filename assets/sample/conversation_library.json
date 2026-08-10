@@ -11248,6 +11248,215 @@
       "positiveResults": 0,
       "neutralResults": 0,
       "negativeResults": 0
+    },
+    {
+      "id": "conversation-playful-013",
+      "japaneseText": "今はいないですよ。",
+      "englishMeaning": "I’m not seeing anyone right now.",
+      "translations": {
+        "ko": "지금은 만나는 사람 없어요."
+      },
+      "koreanRomanization": "Jigeumeun mannaneun saram eobseoyo.",
+      "category": "playful",
+      "tones": [
+        "friendly"
+      ],
+      "directness": 2,
+      "boldness": "light",
+      "usageType": "comeback",
+      "topics": [
+        "compatibility",
+        "dating",
+        "playful",
+        "relationships"
+      ],
+      "manualOnly": true,
+      "tts": {
+        "jp": true,
+        "ko": true
+      },
+      "notes": "Source family: Core cue responses when asked relationship status",
+      "isFavorite": false,
+      "isUserCreated": false,
+      "timesShown": 0,
+      "timesUsed": 0,
+      "positiveResults": 0,
+      "neutralResults": 0,
+      "negativeResults": 0
+    },
+    {
+      "id": "conversation-playful-014",
+      "japaneseText": "いないですよ。面接ですか？笑",
+      "englishMeaning": "No. Is this an interview?",
+      "translations": {
+        "ko": "없어요. 면접인가요? ㅋㅋ"
+      },
+      "koreanRomanization": "Eobseoyo. Myeonjeobingayo? ㅋㅋ",
+      "category": "playful",
+      "tones": [
+        "friendly",
+        "playful"
+      ],
+      "directness": 2,
+      "boldness": "light",
+      "usageType": "comeback",
+      "topics": [
+        "compatibility",
+        "dating",
+        "playful",
+        "relationships"
+      ],
+      "manualOnly": true,
+      "tts": {
+        "jp": true,
+        "ko": true
+      },
+      "notes": "Source family: Core cue responses when asked relationship status",
+      "isFavorite": false,
+      "isUserCreated": false,
+      "timesShown": 0,
+      "timesUsed": 0,
+      "positiveResults": 0,
+      "neutralResults": 0,
+      "negativeResults": 0
+    },
+    {
+      "id": "conversation-playful-015",
+      "japaneseText": "今はフリーです。なんで気になったんですか？笑",
+      "englishMeaning": "I’m single right now. Why are you curious?",
+      "translations": {
+        "ko": "지금은 솔로예요. 왜 궁금해요? ㅋㅋ"
+      },
+      "koreanRomanization": "Jigeumeun solroyeyo. Wae gunggeumhaeyo? ㅋㅋ",
+      "category": "playful",
+      "tones": [
+        "friendly",
+        "playful"
+      ],
+      "directness": 2,
+      "boldness": "light",
+      "usageType": "comeback",
+      "topics": [
+        "compatibility",
+        "dating",
+        "playful",
+        "relationships"
+      ],
+      "manualOnly": true,
+      "tts": {
+        "jp": true,
+        "ko": true
+      },
+      "notes": "Source family: Core cue responses when asked relationship status",
+      "isFavorite": false,
+      "isUserCreated": false,
+      "timesShown": 0,
+      "timesUsed": 0,
+      "positiveResults": 0,
+      "neutralResults": 0,
+      "negativeResults": 0
+    },
+    {
+      "id": "conversation-playful-016",
+      "japaneseText": "けっこう長いですよ。",
+      "englishMeaning": "I’ve been here quite a while.",
+      "translations": {
+        "ko": "꽤 오래됐어요."
+      },
+      "koreanRomanization": "Kkwae oraedwaesseoyo.",
+      "category": "playful",
+      "tones": [
+        "friendly"
+      ],
+      "directness": 2,
+      "boldness": "light",
+      "usageType": "comeback",
+      "topics": [
+        "japanese",
+        "playful",
+        "travel"
+      ],
+      "manualOnly": true,
+      "tts": {
+        "jp": true,
+        "ko": true
+      },
+      "notes": "Source family: Core cue responses when asked time in Japan",
+      "isFavorite": false,
+      "isUserCreated": false,
+      "timesShown": 0,
+      "timesUsed": 0,
+      "positiveResults": 0,
+      "neutralResults": 0,
+      "negativeResults": 0
+    },
+    {
+      "id": "conversation-playful-017",
+      "japaneseText": "まだそんなに長くないですよ。",
+      "englishMeaning": "I haven’t been here that long yet.",
+      "translations": {
+        "ko": "아직 그렇게 오래되진 않았어요."
+      },
+      "koreanRomanization": "Ajik geureotge oraedoejin anhasseoyo.",
+      "category": "playful",
+      "tones": [
+        "friendly"
+      ],
+      "directness": 2,
+      "boldness": "light",
+      "usageType": "comeback",
+      "topics": [
+        "japanese",
+        "playful",
+        "travel"
+      ],
+      "manualOnly": true,
+      "tts": {
+        "jp": true,
+        "ko": true
+      },
+      "notes": "Source family: Core cue responses when asked time in Japan",
+      "isFavorite": false,
+      "isUserCreated": false,
+      "timesShown": 0,
+      "timesUsed": 0,
+      "positiveResults": 0,
+      "neutralResults": 0,
+      "negativeResults": 0
+    },
+    {
+      "id": "conversation-playful-018",
+      "japaneseText": "いつからだと思います？笑",
+      "englishMeaning": "When do you think I came here?",
+      "translations": {
+        "ko": "언제부터였을 것 같아요? ㅋㅋ"
+      },
+      "koreanRomanization": "Eonjebuteoyeosseul geot gatayo? ㅋㅋ",
+      "category": "playful",
+      "tones": [
+        "friendly"
+      ],
+      "directness": 2,
+      "boldness": "light",
+      "usageType": "comeback",
+      "topics": [
+        "japanese",
+        "playful",
+        "travel"
+      ],
+      "manualOnly": true,
+      "tts": {
+        "jp": true,
+        "ko": true
+      },
+      "notes": "Source family: Core cue responses when asked time in Japan",
+      "isFavorite": false,
+      "isUserCreated": false,
+      "timesShown": 0,
+      "timesUsed": 0,
+      "positiveResults": 0,
+      "neutralResults": 0,
+      "negativeResults": 0
     }
   ]
 }

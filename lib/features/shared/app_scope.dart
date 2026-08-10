@@ -54,7 +54,7 @@ class AppState extends ChangeNotifier {
   final List<String> _recentlyShown = <String>[];
 
   static const int _recentlyShownMemory = 12;
-  static const int _conversationLibraryVersion = 1;
+  static const int _conversationLibraryVersion = 2;
 
   AppSettings get settings => _settings;
 

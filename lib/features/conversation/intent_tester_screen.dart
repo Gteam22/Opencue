@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../../domain/conversation/conversation_assist_controller.dart';
 import '../../domain/conversation/conversation_models.dart';
-import '../../domain/conversation/conversation_response_engine.dart';
+import '../../domain/conversation/conversation_recognition_service.dart';
 import '../shared/app_scope.dart';
 import '../shared/widgets.dart';
 
@@ -17,27 +18,38 @@ class _IntentTesterScreenState extends State<IntentTesterScreen> {
   final TextEditingController _input = TextEditingController(
     text: '目の色が綺麗',
   );
-  final ConversationResponseEngine _engine =
-      const ConversationResponseEngine();
+  late final ConversationAssistController _controller;
   ConversationSuggestionResult? _result;
 
   @override
+  void initState() {
+    super.initState();
+    _controller = ConversationAssistController(
+      recognition: const NullConversationRecognitionService(),
+    );
+  }
+
+  @override
   void dispose() {
+    _controller.dispose();
     _input.dispose();
     super.dispose();
   }
 
-  void _test() {
+  Future<void> _test() async {
     final state = AppScope.read(context);
+    await _controller.onUtteranceFinalized(
+      _input.text,
+      library: state.lines,
+      preferences: ConversationPreferences(
+        adultContentEnabled:
+            state.settings.conversationAssistAdultContentEnabled,
+      ),
+      source: FinalizedUtteranceSource.manual,
+    );
+    if (!mounted) return;
     setState(() {
-      _result = _engine.suggest(
-        transcript: _input.text,
-        library: state.lines,
-        preferences: ConversationPreferences(
-          adultContentEnabled:
-              state.settings.conversationAssistAdultContentEnabled,
-        ),
-      );
+      _result = _controller.result;
     });
   }
 
@@ -45,6 +57,7 @@ class _IntentTesterScreenState extends State<IntentTesterScreen> {
   Widget build(BuildContext context) {
     final strings = AppScope.strings(context);
     final result = _result;
+    final diagnostics = _controller.diagnostics;
     return Scaffold(
       appBar: AppBar(title: Text(strings.t('intentTester.title'))),
       body: ListView(
@@ -73,6 +86,23 @@ class _IntentTesterScreenState extends State<IntentTesterScreen> {
                 if (result != null) ...<Widget>[
                   const SizedBox(height: 20),
                   _IntentResult(result: result),
+                ],
+                if (diagnostics != null) ...<Widget>[
+                  const SizedBox(height: AppTheme.gap),
+                  SectionCard(
+                    title: strings.t('assist.pipelineDiagnostics'),
+                    child: SelectableText(
+                      'Intent: ${diagnostics.intentId}\n'
+                      'Confidence: '
+                      '${diagnostics.confidence.toStringAsFixed(2)}\n'
+                      'Matcher: ${diagnostics.matcher.name}\n'
+                      'Action: ${diagnostics.action.name}\n'
+                      'Responses found: '
+                      '${diagnostics.responsesFound}\n'
+                      'Displayed: '
+                      '${diagnostics.responsesDisplayed}',
+                    ),
+                  ),
                 ],
               ],
             ),
