@@ -1,4 +1,6 @@
 import 'conversation_models.dart';
+import 'conversation_intent.dart';
+import 'conversation_intent_matcher.dart';
 import 'language_detector.dart';
 
 /// Small, deterministic multilingual intent layer. It is intentionally behind
@@ -6,9 +8,11 @@ import 'language_detector.dart';
 class ConversationInterpreter {
   const ConversationInterpreter({
     this.languageDetector = const ConversationLanguageDetector(),
+    this.intentMatcher = const ConversationIntentMatcher(),
   });
 
   final ConversationLanguageDetector languageDetector;
+  final ConversationIntentMatcher intentMatcher;
 
   ConversationInterpretation interpret(
     String transcript, {
@@ -21,6 +25,13 @@ class ConversationInterpreter {
     ].join(' ');
     final intents = <ConversationIntent>{};
     final topics = <ConversationTopic>{};
+    final intentMatches = intentMatcher.match(
+      transcript,
+      recentTranscripts: history
+          .take(5)
+          .map((turn) => turn.transcript)
+          .toList(growable: false),
+    );
 
     void intent(ConversationIntent value, List<String> terms) {
       if (_hasAny(context, terms)) intents.add(value);
@@ -54,7 +65,10 @@ class ConversationInterpreter {
     intent(ConversationIntent.tease,
         const ['joking', 'kidding', '冗談', 'いじ', '장난', '농담']);
 
-    final question = transcript.contains('?') ||
+    final question = intentMatches.any(
+          (match) => match.function == ConversationFunction.question,
+        ) ||
+        transcript.contains('?') ||
         transcript.contains('？') ||
         _hasAny(normalized, const [
           'what ', 'where ', 'when ', 'why ', 'how ', 'do you', 'are you',
@@ -105,6 +119,11 @@ class ConversationInterpreter {
       '예쁘', '귀엽', '칭찬',
     ]);
 
+    for (final match in intentMatches) {
+      _applyFunction(match.function, intents);
+      _applyTags(match.definition.contextTags, topics);
+    }
+
     if (topics.isEmpty) topics.add(ConversationTopic.general);
     final tokens = _tokens(normalized);
     final meaningfulIntents = intents
@@ -122,8 +141,74 @@ class ConversationInterpreter {
       topics: topics,
       tokens: tokens,
       isQuestion: question,
-      confidence: (0.25 + evidence * 0.12).clamp(0.0, 1.0).toDouble(),
+      confidence: intentMatches.isNotEmpty
+          ? intentMatches.first.confidence
+          : (0.25 + evidence * 0.12).clamp(0.0, 1.0).toDouble(),
+      intentMatches: intentMatches,
     );
+  }
+
+  void _applyFunction(
+    ConversationFunction function,
+    Set<ConversationIntent> intents,
+  ) {
+    switch (function) {
+      case ConversationFunction.question:
+        intents.add(ConversationIntent.answerQuestion);
+        break;
+      case ConversationFunction.compliment:
+        intents.add(ConversationIntent.compliment);
+        break;
+      case ConversationFunction.tease:
+        intents.add(ConversationIntent.tease);
+        break;
+      case ConversationFunction.invitation:
+        intents.add(ConversationIntent.invite);
+        break;
+      case ConversationFunction.softRejection:
+        intents.add(ConversationIntent.acknowledge);
+        break;
+      case ConversationFunction.agreement:
+        intents.add(ConversationIntent.agree);
+        break;
+      case ConversationFunction.thanks:
+        intents.add(ConversationIntent.thank);
+        break;
+      case ConversationFunction.apology:
+        intents.add(ConversationIntent.apologize);
+        break;
+      case ConversationFunction.greeting:
+        intents.add(ConversationIntent.greeting);
+        break;
+      case ConversationFunction.sharedInformation:
+      case ConversationFunction.surprise:
+      case ConversationFunction.interest:
+      case ConversationFunction.goodbye:
+        intents.add(ConversationIntent.acknowledge);
+        break;
+    }
+  }
+
+  void _applyTags(Set<String> tags, Set<ConversationTopic> topics) {
+    const mapping = <String, ConversationTopic>{
+      'weekend': ConversationTopic.weekend,
+      'work': ConversationTopic.work,
+      'school': ConversationTopic.work,
+      'hobbies': ConversationTopic.hobbies,
+      'food': ConversationTopic.food,
+      'drinks': ConversationTopic.drinks,
+      'music': ConversationTopic.music,
+      'travel': ConversationTopic.travel,
+      'relationships': ConversationTopic.relationships,
+      'dating': ConversationTopic.dating,
+      'kissing': ConversationTopic.kissing,
+      'preferences': ConversationTopic.compatibility,
+      'compliments': ConversationTopic.compliments,
+    };
+    for (final tag in tags) {
+      final topic = mapping[tag];
+      if (topic != null) topics.add(topic);
+    }
   }
 
   bool _hasAny(String text, List<String> terms) =>

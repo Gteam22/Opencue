@@ -11,6 +11,7 @@ import '../../data/scan/scan_capability.dart';
 import '../../data/transfer/transfer_service.dart';
 import '../../data/speech/speech_capability.dart';
 import '../../domain/enums/enums.dart';
+import '../conversation/intent_tester_screen.dart';
 import '../shared/app_scope.dart';
 import '../shared/widgets.dart';
 import 'about_screen.dart';
@@ -203,9 +204,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: AppTheme.gap),
 
-              // Developer options. Grouped away from ordinary settings and
-              // only meaningful where the scan exists.
-              if (ScanCapability.hasCameraImplementation) ...<Widget>[
+              // Developer tools stay available on desktop too: the intent
+              // tester does not require camera or microphone hardware.
+              ...<Widget>[
                 SectionCard(
                   title: strings.t('diagnostics.enable'),
                   child: Column(
@@ -228,23 +229,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       if (settings.developerMode) ...<Widget>[
                         const Divider(height: 20),
-                        SwitchListTile(
+                        ListTile(
                           contentPadding: EdgeInsets.zero,
-                          value: settings.retainScanImages,
-                          onChanged: (value) =>
-                              _setRetainImages(value: value),
-                          title: Text(strings.t('diagnostics.retainImages')),
-                          subtitle:
-                              Text(strings.t('diagnostics.retainWarning')),
-                        ),
-                        if (settings.retainScanImages) ...<Widget>[
-                          const SizedBox(height: 8),
-                          OutlinedButton.icon(
-                            onPressed: _clearDebugImages,
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                            label:
-                                Text(strings.t('diagnostics.clearImages')),
+                          leading: const Icon(Icons.science_outlined),
+                          title: Text(strings.t('intentTester.title')),
+                          subtitle: Text(strings.t('intentTester.subtitle')),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const IntentTesterScreen(),
+                            ),
                           ),
+                        ),
+                        if (ScanCapability.hasCameraImplementation) ...<Widget>[
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: settings.retainScanImages,
+                            onChanged: (value) =>
+                                _setRetainImages(value: value),
+                            title: Text(strings.t('diagnostics.retainImages')),
+                            subtitle:
+                                Text(strings.t('diagnostics.retainWarning')),
+                          ),
+                          if (settings.retainScanImages) ...<Widget>[
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: _clearDebugImages,
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              label:
+                                  Text(strings.t('diagnostics.clearImages')),
+                            ),
+                          ],
                         ],
                       ],
                     ],

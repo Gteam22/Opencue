@@ -60,6 +60,8 @@ const Map<String, String> stringsEn = <String, String>{
   'assist.suggestions': 'Suggested replies',
   'assist.more': 'More',
   'assist.copy': 'Copy Japanese line',
+  'assist.accept': 'Mark as used',
+  'assist.dismiss': 'Not useful',
   'assist.safeFallback':
       'The meaning was uncertain, so these are low-pressure fallback options.',
   'assist.lowConfidence':
@@ -72,6 +74,13 @@ const Map<String, String> stringsEn = <String, String>{
   'assist.detected.unknown': '—',
   'assist.privacy':
       'Privacy: listening starts only when you tap Listen. Raw audio is not stored by OpenCue; the short transcript and session history stay in memory and are cleared when you leave this screen.',
+  'intentTester.title': 'Intent tester',
+  'intentTester.subtitle':
+      'Paste a transcript to inspect intent confidence and ranked replies.',
+  'intentTester.input': 'Transcript to test',
+  'intentTester.run': 'Detect intent',
+  'intentTester.detected': 'Detected intents',
+  'intentTester.none': 'No intent passed its confidence threshold.',
   'about.privacyNoProfiling':
       'This version does not identify or profile other people.',
   'about.privacyNoTelemetry':

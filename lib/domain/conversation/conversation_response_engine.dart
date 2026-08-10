@@ -1,5 +1,6 @@
 import '../enums/enums.dart';
 import '../models/opener_line.dart';
+import 'conversation_intent.dart';
 import 'conversation_interpreter.dart';
 import 'conversation_models.dart';
 
@@ -46,12 +47,14 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
       return scoreOrder != 0 ? scoreOrder : a.line.id.compareTo(b.line.id);
     });
 
-    final selected = ranked.take(limit).toList();
+    final selected = _selectDiverse(ranked, limit);
     var usedFallback = false;
     final lowRecognitionConfidence = transcriptionConfidence != null &&
         transcriptionConfidence >= 0 &&
         transcriptionConfidence < 0.45;
-    if (interpretation.confidence < 0.38 || lowRecognitionConfidence) {
+    final uncertainIntent = interpretation.primaryIntent == null &&
+        interpretation.confidence < 0.5;
+    if (uncertainIntent || lowRecognitionConfidence) {
       selected.clear();
     }
     if (selected.length < limit) {
@@ -110,6 +113,26 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
       line.koreanRomanization ?? '',
       ...line.topics,
     ].join(' ').toLowerCase();
+    final primaryIntent = input.primaryIntent;
+    if (primaryIntent != null) {
+      var hintMatches = 0;
+      for (final hint in primaryIntent.definition.responseHints) {
+        final normalizedHint = hint.toLowerCase();
+        if (lineText.contains(normalizedHint) ||
+            line.topics.contains(normalizedHint)) {
+          hintMatches++;
+        }
+      }
+      if (hintMatches > 0) {
+        score += (hintMatches * 15).clamp(0, 60).toDouble();
+        reasons.add('intentFamily');
+      }
+      if (primaryIntent.function == ConversationFunction.softRejection &&
+          line.tones.contains(Tone.safe)) {
+        score += 18;
+        reasons.add('nonPushy');
+      }
+    }
     final overlap = input.tokens.where(lineText.contains).length;
     if (overlap > 0) {
       score += overlap * 6;
@@ -156,8 +179,51 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
     }
     final personal = line.personalSignal;
     if (personal != null) score += personal * 6;
+    if (line.displayLength <= 24) {
+      score += 5;
+      reasons.add('short');
+    } else if (line.displayLength > 40) {
+      score -= 10;
+    }
     score -= (line.boldness?.index ?? 0) * 0.5;
     return ConversationSuggestion(line: line, score: score, reasons: reasons);
+  }
+
+  List<ConversationSuggestion> _selectDiverse(
+    List<ConversationSuggestion> ranked,
+    int limit,
+  ) {
+    final selected = <ConversationSuggestion>[];
+    final usedStyles = <String>{};
+    for (final candidate in ranked) {
+      final style = _styleKey(candidate.line);
+      if (selected.isNotEmpty && usedStyles.contains(style)) continue;
+      selected.add(candidate);
+      usedStyles.add(style);
+      if (selected.length == limit) return selected;
+    }
+    for (final candidate in ranked) {
+      if (selected.any((item) => item.line.id == candidate.line.id)) continue;
+      selected.add(candidate);
+      if (selected.length == limit) break;
+    }
+    return selected;
+  }
+
+  String _styleKey(OpenerLine line) {
+    if (line.tones.contains(Tone.safe) || line.tones.contains(Tone.friendly)) {
+      return 'natural';
+    }
+    if (line.tones.contains(Tone.witty) ||
+        line.tones.contains(Tone.humorous)) {
+      return 'funny';
+    }
+    if (line.tones.contains(Tone.flirty) ||
+        line.tones.contains(Tone.romantic)) {
+      return 'flirty';
+    }
+    if (line.tones.contains(Tone.classy)) return 'gentleman';
+    return 'bold';
   }
 
   Set<Tone> _tonesFor(ConversationToneBias bias) => switch (bias) {

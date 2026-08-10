@@ -147,6 +147,10 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
                   _Suggestions(
                     result: _controller.result!,
                     onMore: _controller.more,
+                    feedbackFor: _controller.feedbackFor,
+                    onAccepted: _acceptSuggestion,
+                    onDismissed: (line) =>
+                        _controller.dismissSuggestion(line.id),
                   ),
                 if (_controller.history.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 20),
@@ -209,6 +213,21 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
       state.settings.copyWith(
         conversationAssistAdultContentEnabled: enabled,
       ),
+    );
+  }
+
+  Future<void> _acceptSuggestion(OpenerLine line) async {
+    if (_controller.feedbackFor(line.id) ==
+        SuggestionFeedbackKind.accepted) {
+      return;
+    }
+    _controller.acceptSuggestion(line.id);
+    final state = AppScope.read(context);
+    await state.recordOutcome(
+      line: line,
+      outcome: InteractionOutcome.positive,
+      notes: 'Conversation Assist intent: '
+          '${_controller.result?.interpretation.primaryIntentId ?? 'unknown'}',
     );
   }
 }
@@ -410,10 +429,19 @@ class _PreferenceControls extends StatelessWidget {
 }
 
 class _Suggestions extends StatelessWidget {
-  const _Suggestions({required this.result, required this.onMore});
+  const _Suggestions({
+    required this.result,
+    required this.onMore,
+    required this.feedbackFor,
+    required this.onAccepted,
+    required this.onDismissed,
+  });
 
   final ConversationSuggestionResult result;
   final VoidCallback onMore;
+  final SuggestionFeedbackKind? Function(String lineId) feedbackFor;
+  final ValueChanged<OpenerLine> onAccepted;
+  final ValueChanged<OpenerLine> onDismissed;
 
   @override
   Widget build(BuildContext context) {
@@ -458,6 +486,9 @@ class _Suggestions extends StatelessWidget {
           _SuggestionCard(
             number: i + 1,
             line: result.suggestions[i].line,
+            feedback: feedbackFor(result.suggestions[i].line.id),
+            onAccepted: onAccepted,
+            onDismissed: onDismissed,
           ),
       ],
     );
@@ -465,33 +496,34 @@ class _Suggestions extends StatelessWidget {
 }
 
 class _SuggestionCard extends StatelessWidget {
-  const _SuggestionCard({required this.number, required this.line});
+  const _SuggestionCard({
+    required this.number,
+    required this.line,
+    required this.feedback,
+    required this.onAccepted,
+    required this.onDismissed,
+  });
 
   final int number;
   final OpenerLine line;
+  final SuggestionFeedbackKind? feedback;
+  final ValueChanged<OpenerLine> onAccepted;
+  final ValueChanged<OpenerLine> onDismissed;
 
   @override
   Widget build(BuildContext context) {
     final strings = AppScope.strings(context);
-    final style = line.tones.contains(Tone.witty) ||
-            line.tones.contains(Tone.humorous)
-        ? strings.t('assist.tone.funny')
-        : line.tones.contains(Tone.flirty) || line.tones.contains(Tone.romantic)
-            ? strings.t('assist.tone.flirty')
-            : line.tones.contains(Tone.classy)
-                ? strings.t('assist.tone.gentleman')
-                : line.tones.contains(Tone.direct) ||
-                        line.tones.contains(Tone.suggestive)
-                    ? strings.t('assist.tone.bold')
-                    : strings.t('assist.style.natural');
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: InkWell(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => LineDetailScreen(lineId: line.id),
-          ),
-        ),
+        onTap: () {
+          onAccepted(line);
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => LineDetailScreen(lineId: line.id),
+            ),
+          );
+        },
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -504,26 +536,40 @@ class _SuggestionCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     LineText(line: line, selectable: false),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      children: <Widget>[
-                        MetaTag(style),
-                        if (line.usageType != null)
-                          MetaTag(strings.usageType(line.usageType!)),
-                        if (line.boldness != null)
-                          MetaTag(strings.boldness(line.boldness!)),
-                      ],
-                    ),
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: strings.t('assist.copy'),
-                onPressed: () => Clipboard.setData(
-                  ClipboardData(text: line.japaneseText),
-                ),
-                icon: const Icon(Icons.copy_outlined),
+              Column(
+                children: <Widget>[
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: strings.t('assist.accept'),
+                    onPressed: () => onAccepted(line),
+                    icon: Icon(
+                      feedback == SuggestionFeedbackKind.accepted
+                          ? Icons.thumb_up
+                          : Icons.thumb_up_outlined,
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: strings.t('assist.dismiss'),
+                    onPressed: () => onDismissed(line),
+                    icon: Icon(
+                      feedback == SuggestionFeedbackKind.dismissed
+                          ? Icons.thumb_down
+                          : Icons.thumb_down_outlined,
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: strings.t('assist.copy'),
+                    onPressed: () => Clipboard.setData(
+                      ClipboardData(text: line.japaneseText),
+                    ),
+                    icon: const Icon(Icons.copy_outlined),
+                  ),
+                ],
               ),
             ],
           ),

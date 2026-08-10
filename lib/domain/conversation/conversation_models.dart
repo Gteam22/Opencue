@@ -1,5 +1,6 @@
 import '../enums/enums.dart';
 import '../models/opener_line.dart';
+import 'conversation_intent.dart';
 
 /// Recognition language is deliberately separate from the display language.
 enum ConversationInputLanguage { automatic, japanese, korean, english }
@@ -41,6 +42,8 @@ enum ConversationTopic {
 /// A compact tone control for the assist screen.
 enum ConversationToneBias { natural, funny, flirty, gentleman, bold }
 
+enum SuggestionFeedbackKind { shown, accepted, dismissed }
+
 class ConversationInterpretation {
   const ConversationInterpretation({
     required this.language,
@@ -49,6 +52,7 @@ class ConversationInterpretation {
     required this.tokens,
     required this.isQuestion,
     required this.confidence,
+    this.intentMatches = const <ConversationIntentMatch>[],
   });
 
   final DetectedLanguage language;
@@ -57,6 +61,12 @@ class ConversationInterpretation {
   final Set<String> tokens;
   final bool isQuestion;
   final double confidence;
+  final List<ConversationIntentMatch> intentMatches;
+
+  ConversationIntentMatch? get primaryIntent =>
+      intentMatches.isEmpty ? null : intentMatches.first;
+  String? get primaryIntentId => primaryIntent?.id;
+  double get intentConfidence => primaryIntent?.confidence ?? confidence;
 }
 
 class ConversationPreferences {
@@ -125,5 +135,21 @@ class ConversationTurn {
 
   final String transcript;
   final DetectedLanguage language;
+  final DateTime createdAt;
+}
+
+class ConversationSuggestionFeedback {
+  const ConversationSuggestionFeedback({
+    required this.transcript,
+    required this.intentId,
+    required this.lineId,
+    required this.kind,
+    required this.createdAt,
+  });
+
+  final String transcript;
+  final String? intentId;
+  final String lineId;
+  final SuggestionFeedbackKind kind;
   final DateTime createdAt;
 }

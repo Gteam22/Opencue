@@ -44,6 +44,10 @@ class ConversationAssistController extends ChangeNotifier {
   List<OpenerLine> _library = const <OpenerLine>[];
   final List<ConversationTurn> _history = <ConversationTurn>[];
   final List<String> _recentLineIds = <String>[];
+  final List<ConversationSuggestionFeedback> _feedback =
+      <ConversationSuggestionFeedback>[];
+  final Map<String, SuggestionFeedbackKind> _latestFeedback =
+      <String, SuggestionFeedbackKind>{};
   Timer? _vadTimer;
   bool _initialized = false;
   bool _finalizing = false;
@@ -51,7 +55,7 @@ class ConversationAssistController extends ChangeNotifier {
   bool _closed = false;
   DateTime? _listeningStartedAt;
 
-  static const Duration noSpeechTimeout = Duration(seconds: 8);
+  static const Duration noSpeechTimeout = Duration(seconds: 10);
 
   ConversationAssistPhase get phase => _phase;
   String get transcript => _transcript;
@@ -60,6 +64,8 @@ class ConversationAssistController extends ChangeNotifier {
   double get soundLevel => _soundLevel;
   ConversationSuggestionResult? get result => _result;
   List<ConversationTurn> get history => List.unmodifiable(_history);
+  List<ConversationSuggestionFeedback> get feedback =>
+      List.unmodifiable(_feedback);
   bool get isListening => _phase == ConversationAssistPhase.listening;
 
   Future<void> prepare() async {
@@ -184,6 +190,9 @@ class ConversationAssistController extends ChangeNotifier {
     );
     final ids = _result!.suggestions.map((item) => item.line.id);
     _remember(ids);
+    for (final id in ids) {
+      _recordFeedback(id, SuggestionFeedbackKind.shown);
+    }
     if (recordTurn) {
       _history.insert(
         0,
@@ -207,6 +216,35 @@ class ConversationAssistController extends ChangeNotifier {
       recordTurn: false,
       transcriptionConfidence: _sourceConfidence,
     );
+  }
+
+  SuggestionFeedbackKind? feedbackFor(String lineId) =>
+      _latestFeedback[lineId];
+
+  void acceptSuggestion(String lineId) {
+    if (_latestFeedback[lineId] == SuggestionFeedbackKind.accepted) return;
+    _recordFeedback(lineId, SuggestionFeedbackKind.accepted);
+    notifyListeners();
+  }
+
+  void dismissSuggestion(String lineId) {
+    if (_latestFeedback[lineId] == SuggestionFeedbackKind.dismissed) return;
+    _recordFeedback(lineId, SuggestionFeedbackKind.dismissed);
+    notifyListeners();
+  }
+
+  void _recordFeedback(String lineId, SuggestionFeedbackKind kind) {
+    _feedback.add(ConversationSuggestionFeedback(
+      transcript: _transcript,
+      intentId: _result?.interpretation.primaryIntentId,
+      lineId: lineId,
+      kind: kind,
+      createdAt: DateTime.now().toUtc(),
+    ));
+    if (kind != SuggestionFeedbackKind.shown) {
+      _latestFeedback[lineId] = kind;
+    }
+    while (_feedback.length > 60) _feedback.removeAt(0);
   }
 
   Future<void> _finalizeTranscript() async {

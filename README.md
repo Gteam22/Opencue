@@ -152,7 +152,7 @@ and manual recommendations working.
 
 OpenCue receives partial/final transcript events and confidence from the device
 service. It does not create an audio file, retain raw audio, or keep listening
-after voice activity ends (about 1.4 seconds of silence) or the user taps Stop.
+after voice activity ends (about 3.4 seconds of silence) or the user taps Stop.
 The last five transcripts are memory-only context for follow-up turns.
 
 ### What the scan does and does not do
@@ -283,6 +283,16 @@ Listen tap -> platform speech recognizer -> sound-level VAD / final result
 `ConversationSuggestionProvider` is the seam for a future local model or
 fallback generator. The current provider is deterministic, fast and library
 backed; it does not call a paid API.
+
+The intent layer is data-driven and currently ships 120 common one-on-one
+conversation intents. Matching runs only on finalized utterances: normalized
+phrase patterns first, keyword combinations second, then inexpensive character
+bigram similarity and recent-turn context. Questions and invitations receive an
+actionability priority, while uncertain matches fall back to neutral lines.
+
+Enable **Developer mode** in Settings to open **Intent tester**. Paste any
+recognized phrase to see the top intent IDs, confidence values, and the same
+three ranked replies the live screen would show.
 
 ### Camera lifecycle
 

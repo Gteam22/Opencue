@@ -4,6 +4,9 @@ import 'package:opencue/domain/models/app_settings.dart';
 import 'package:opencue/domain/models/opener_line.dart';
 
 import '../lib/domain/conversation/conversation_assist_controller.dart';
+import '../lib/domain/conversation/conversation_intent_catalog.dart';
+import '../lib/domain/conversation/conversation_intent_matcher.dart';
+import '../lib/domain/conversation/conversation_interpreter.dart';
 import '../lib/domain/conversation/conversation_models.dart';
 import '../lib/domain/conversation/conversation_recognition_service.dart';
 import '../lib/domain/conversation/conversation_response_engine.dart';
@@ -31,6 +34,62 @@ void main() {
       expect(detector.detect('주말에 뭐 해요?'), DetectedLanguage.korean);
       expect(detector.detect('What are you doing this weekend?'),
           DetectedLanguage.english);
+    });
+  });
+
+  group('data-driven intent catalog', () {
+    const matcher = ConversationIntentMatcher();
+    const interpreter = ConversationInterpreter();
+
+    test('ships at least 100 maintainable high-value intents', () {
+      expect(conversationIntentCatalog.length, greaterThanOrEqualTo(100));
+      expect(
+        conversationIntentCatalog.map((intent) => intent.id).toSet().length,
+        conversationIntentCatalog.length,
+      );
+      expect(
+        conversationIntentCatalog.every((intent) =>
+            intent.examples.length >= 5 && intent.responseHints.length >= 5),
+        isTrue,
+      );
+    });
+
+    test('natural eye compliment variations share one semantic intent', () {
+      for (final phrase in <String>[
+        '目の色が綺麗',
+        '目きれいだね',
+        '瞳がすごく綺麗',
+        '綺麗な目してるね',
+        '目が印象的',
+      ]) {
+        expect(matcher.match(phrase).first.id, 'compliment_eyes');
+      }
+    });
+
+    test('recognizes relationship, teasing, availability and invitation', () {
+      expect(matcher.match('彼女いるの？').first.id,
+          'ask_relationship_status');
+      expect(matcher.match('モテそう').first.id, 'tease_popular');
+      expect(matcher.match('今週末何してる？').first.id,
+          'ask_weekend_plans');
+      expect(matcher.match('また飲もう').first.id, 'invite_drink_again');
+    });
+
+    test('actionable question outranks a passive compliment', () {
+      final result = interpreter.interpret(
+        '日本語上手ですね。日本にどのくらいいるんですか？',
+      );
+      expect(result.primaryIntentId, 'ask_time_in_japan');
+      expect(result.isQuestion, isTrue);
+    });
+
+    test('recent context can strengthen an otherwise equal match', () {
+      final result = matcher.match(
+        'Are you free this weekend?',
+        recentTranscripts: const <String>['weekend plans'],
+      );
+      expect(result, isNotEmpty);
+      expect(result.first.reasons, contains('recentContext'));
     });
   });
 
@@ -147,6 +206,30 @@ void main() {
       expect(result.usedSafeFallback, isTrue);
       expect(result.suggestions.first.line.id, 'seed-universal-10');
     });
+
+    test('live results never exceed three cards', () {
+      final lines = <OpenerLine>[
+        safe,
+        funny,
+        for (var i = 0; i < 4; i++)
+          OpenerLine(
+            id: 'extra-$i',
+            japaneseText: '短い返事$i',
+            englishMeaning: 'Short reply $i',
+            tones: const <Tone>{Tone.friendly},
+            topics: const <String>{'kissing'},
+          ),
+      ];
+      final result = engine.suggest(
+        transcript: 'Do you like kissing?',
+        library: lines,
+      );
+      expect(result.suggestions.length, lessThanOrEqualTo(3));
+      expect(
+        result.suggestions.map((item) => item.line.id).toSet().length,
+        result.suggestions.length,
+      );
+    });
   });
 
   test('VAD stops only after actual speech followed by silence', () {
@@ -163,6 +246,13 @@ void main() {
         isFalse);
     expect(tracker.shouldStop(start.add(const Duration(milliseconds: 1200))),
         isTrue);
+  });
+
+  test('default recording windows are two seconds more forgiving', () {
+    final tracker = VoiceActivityTracker();
+    expect(tracker.silenceDuration, const Duration(milliseconds: 3400));
+    expect(ConversationAssistController.noSpeechTimeout,
+        const Duration(seconds: 10));
   });
 
   test('controller accepts partial/final transcript and keeps short history',
@@ -184,12 +274,29 @@ void main() {
     );
     recognition.result('週末は何をするの？', false, 0.4);
     expect(controller.transcript, contains('週末'));
+    expect(controller.result, isNull);
+    expect(controller.phase, ConversationAssistPhase.listening);
     recognition.result('週末は何をするの？', true, 0.9);
     await Future<void>.delayed(Duration.zero);
 
     expect(controller.phase, ConversationAssistPhase.suggestions);
     expect(controller.result, isNotNull);
     expect(controller.history, hasLength(1));
+    expect(controller.feedback.last.kind, SuggestionFeedbackKind.shown);
+
+    controller.acceptSuggestion('reply');
+    expect(controller.feedback.last.kind, SuggestionFeedbackKind.accepted);
+    expect(
+      controller.feedbackFor('reply'),
+      SuggestionFeedbackKind.accepted,
+    );
+
+    controller.dismissSuggestion('reply');
+    expect(controller.feedback.last.kind, SuggestionFeedbackKind.dismissed);
+    expect(
+      controller.feedbackFor('reply'),
+      SuggestionFeedbackKind.dismissed,
+    );
   });
 
   test('controller starts, manually stops, and releases audio resources',

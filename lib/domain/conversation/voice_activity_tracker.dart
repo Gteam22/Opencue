@@ -2,7 +2,7 @@
 /// silence behaviour is deterministic in tests.
 class VoiceActivityTracker {
   VoiceActivityTracker({
-    this.silenceDuration = const Duration(milliseconds: 1400),
+    this.silenceDuration = const Duration(milliseconds: 3400),
     this.minimumSpeechDuration = const Duration(milliseconds: 180),
     this.levelMargin = 4.0,
   });
@@ -47,4 +47,3 @@ class VoiceActivityTracker {
     return now.difference(lastVoice) >= silenceDuration;
   }
 }
-
