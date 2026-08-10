@@ -42,6 +42,8 @@ enum ConversationTopic {
 /// A compact tone control for the assist screen.
 enum ConversationToneBias { natural, funny, flirty, gentleman, bold }
 
+enum ConversationReelSlot { standard, funny, flirty }
+
 enum SuggestionFeedbackKind { shown, accepted, dismissed }
 
 enum ConversationSpeaker { other, user }
@@ -116,11 +118,25 @@ class ConversationSuggestion {
     required this.line,
     required this.score,
     required this.reasons,
+    this.slot,
   });
 
   final OpenerLine line;
   final double score;
   final List<String> reasons;
+  final ConversationReelSlot? slot;
+
+  ConversationSuggestion copyWith({
+    double? score,
+    List<String>? reasons,
+    ConversationReelSlot? slot,
+  }) =>
+      ConversationSuggestion(
+        line: line,
+        score: score ?? this.score,
+        reasons: reasons ?? this.reasons,
+        slot: slot ?? this.slot,
+      );
 }
 
 class ConversationSuggestionResult {
@@ -131,6 +147,9 @@ class ConversationSuggestionResult {
     this.usedSafeFallback = false,
     this.lowRecognitionConfidence = false,
     this.candidateCount = 0,
+    this.reelIntentId,
+    this.excludedAlreadyShown = 0,
+    this.moreGeneration = false,
   });
 
   final String transcript;
@@ -139,6 +158,9 @@ class ConversationSuggestionResult {
   final bool usedSafeFallback;
   final bool lowRecognitionConfidence;
   final int candidateCount;
+  final String? reelIntentId;
+  final int excludedAlreadyShown;
+  final bool moreGeneration;
 }
 
 class ConversationTurn {
@@ -177,6 +199,11 @@ class ConversationPipelineDiagnostics {
     this.matcherReasons = const <String>[],
     this.responseHints = const <String>[],
     this.topResponseScores = const <String, double>{},
+    this.reelSlotLineIds = const <String, String>{},
+    this.excludedAlreadyShown = 0,
+    this.moreGeneration = false,
+    this.displayTexts = const <String, String>{},
+    this.ttsTexts = const <String, String>{},
   });
 
   final String rawTranscript;
@@ -193,6 +220,44 @@ class ConversationPipelineDiagnostics {
   final List<String> matcherReasons;
   final List<String> responseHints;
   final Map<String, double> topResponseScores;
+  final Map<String, String> reelSlotLineIds;
+  final int excludedAlreadyShown;
+  final bool moreGeneration;
+  final Map<String, String> displayTexts;
+  final Map<String, String> ttsTexts;
+
+  ConversationPipelineDiagnostics copyWith({
+    int? responsesFound,
+    int? responsesDisplayed,
+    Map<String, double>? topResponseScores,
+    Map<String, String>? reelSlotLineIds,
+    int? excludedAlreadyShown,
+    bool? moreGeneration,
+    Map<String, String>? displayTexts,
+    Map<String, String>? ttsTexts,
+  }) =>
+      ConversationPipelineDiagnostics(
+        rawTranscript: rawTranscript,
+        normalizedTranscript: normalizedTranscript,
+        finalized: finalized,
+        intentId: intentId,
+        confidence: confidence,
+        matcher: matcher,
+        responsesFound: responsesFound ?? this.responsesFound,
+        responsesDisplayed: responsesDisplayed ?? this.responsesDisplayed,
+        action: action,
+        source: source,
+        createdAt: createdAt,
+        matcherReasons: matcherReasons,
+        responseHints: responseHints,
+        topResponseScores: topResponseScores ?? this.topResponseScores,
+        reelSlotLineIds: reelSlotLineIds ?? this.reelSlotLineIds,
+        excludedAlreadyShown:
+            excludedAlreadyShown ?? this.excludedAlreadyShown,
+        moreGeneration: moreGeneration ?? this.moreGeneration,
+        displayTexts: displayTexts ?? this.displayTexts,
+        ttsTexts: ttsTexts ?? this.ttsTexts,
+      );
 }
 
 class ConversationSuggestionFeedback {

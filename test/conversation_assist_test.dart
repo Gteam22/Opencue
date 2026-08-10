@@ -155,6 +155,8 @@ void main() {
         transcript: '키스할 때 궁합이 중요하다고 생각해?',
         library: <OpenerLine>[safe, explicit],
         limit: 2,
+        semanticIntentId: 'ask_kiss_preference',
+        semanticConfidence: 0.9,
       );
       expect(result.interpretation.language, DetectedLanguage.korean);
       expect(result.suggestions.first.line.id, 'safe-kiss');
@@ -183,7 +185,7 @@ void main() {
           contains('explicit-kiss'));
     });
 
-    test('recent suggestions are rotated down', () {
+    test('recent penalties do not bypass the fixed reel slots', () {
       final result = engine.suggest(
         transcript: 'Do you like kissing?',
         library: <OpenerLine>[safe, explicit],
@@ -194,7 +196,10 @@ void main() {
         ),
         limit: 2,
       );
-      expect(result.suggestions.first.line.id, 'explicit-kiss');
+      expect(result.suggestions.first.line.id, 'safe-kiss');
+      expect(result.suggestions.first.slot, ConversationReelSlot.standard);
+      expect(result.suggestions.map((item) => item.line.id),
+          contains('explicit-kiss'));
     });
 
     test('tone bias and response-shaped usage affect ordering', () {
@@ -206,7 +211,9 @@ void main() {
         ),
         limit: 2,
       );
-      expect(result.suggestions.first.line.id, 'funny-kiss');
+      expect(result.suggestions.first.line.id, 'safe-kiss');
+      expect(result.suggestions[1].line.id, 'funny-kiss');
+      expect(result.suggestions[1].slot, ConversationReelSlot.funny);
       expect(result.suggestions, hasLength(2));
     });
 
@@ -615,6 +622,10 @@ class CountingSuggestionProvider implements ConversationSuggestionProvider {
     double? transcriptionConfidence,
     String? semanticIntentId,
     double? semanticConfidence,
+    String? lockedIntentId,
+    Set<String> excludedLineIds = const <String>{},
+    bool moreGeneration = false,
+    ConversationInterpretation? activeInterpretation,
   }) {
     callCount++;
     return _delegate.suggest(
@@ -626,6 +637,10 @@ class CountingSuggestionProvider implements ConversationSuggestionProvider {
       transcriptionConfidence: transcriptionConfidence,
       semanticIntentId: semanticIntentId,
       semanticConfidence: semanticConfidence,
+      lockedIntentId: lockedIntentId,
+      excludedLineIds: excludedLineIds,
+      moreGeneration: moreGeneration,
+      activeInterpretation: activeInterpretation,
     );
   }
 }

@@ -510,8 +510,8 @@ class _Suggestions extends StatelessWidget {
           ),
         for (var i = 0; i < result.suggestions.length; i++)
           _SuggestionCard(
-            number: i + 1,
             line: result.suggestions[i].line,
+            slot: result.suggestions[i].slot,
             feedback: feedbackFor(result.suggestions[i].line.id),
             onAccepted: onAccepted,
             onDismissed: onDismissed,
@@ -543,10 +543,30 @@ class _PipelineDiagnosticsCard extends StatelessWidget {
       ('Matcher reasons', diagnostics.matcherReasons.join(', ')),
       ('Response hints', diagnostics.responseHints.join(', ')),
       (
+        'Reel slots',
+        diagnostics.reelSlotLineIds.entries
+            .map((entry) => '${entry.key}: ${entry.value}')
+            .join(', '),
+      ),
+      ('Excluded already shown', '${diagnostics.excludedAlreadyShown}'),
+      ('More generation', '${diagnostics.moreGeneration} (same intent)'),
+      (
         'Top response scores',
         diagnostics.topResponseScores.entries
             .map((entry) => '${entry.key}: ${entry.value.toStringAsFixed(1)}')
             .join(', '),
+      ),
+      (
+        'Display text',
+        diagnostics.displayTexts.entries
+            .map((entry) => '${entry.key}: ${entry.value}')
+            .join(' | '),
+      ),
+      (
+        'TTS text',
+        diagnostics.ttsTexts.entries
+            .map((entry) => '${entry.key}: ${entry.value}')
+            .join(' | '),
       ),
     ];
     return SectionCard(
@@ -578,15 +598,15 @@ class _PipelineDiagnosticsCard extends StatelessWidget {
 
 class _SuggestionCard extends StatelessWidget {
   const _SuggestionCard({
-    required this.number,
     required this.line,
+    required this.slot,
     required this.feedback,
     required this.onAccepted,
     required this.onDismissed,
   });
 
-  final int number;
   final OpenerLine line;
+  final ConversationReelSlot? slot;
   final SuggestionFeedbackKind? feedback;
   final ValueChanged<OpenerLine> onAccepted;
   final ValueChanged<OpenerLine> onDismissed;
@@ -610,12 +630,27 @@ class _SuggestionCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              CircleAvatar(radius: 14, child: Text('$number')),
-              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
+                    Text(
+                      switch (slot) {
+                        ConversationReelSlot.standard =>
+                          strings.t('assist.reel.standard'),
+                        ConversationReelSlot.funny =>
+                          strings.t('assist.reel.funny'),
+                        ConversationReelSlot.flirty =>
+                          strings.t('assist.reel.flirty'),
+                        null => strings.t('assist.reel.standard'),
+                      },
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
                     LineText(line: line, selectable: false),
                   ],
                 ),

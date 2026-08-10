@@ -16,6 +16,10 @@ abstract interface class ConversationSuggestionProvider {
     double? transcriptionConfidence,
     String? semanticIntentId,
     double? semanticConfidence,
+    String? lockedIntentId,
+    Set<String> excludedLineIds = const <String>{},
+    bool moreGeneration = false,
+    ConversationInterpretation? activeInterpretation,
   });
 }
 
@@ -38,25 +42,53 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
     double? transcriptionConfidence,
     String? semanticIntentId,
     double? semanticConfidence,
+    String? lockedIntentId,
+    Set<String> excludedLineIds = const <String>{},
+    bool moreGeneration = false,
+    ConversationInterpretation? activeInterpretation,
   }) {
-    final interpretation = interpreter.interpret(
-      transcript,
-      history: history,
-      semanticIntentId: semanticIntentId,
-      semanticConfidence: semanticConfidence,
+    var interpretation = activeInterpretation ??
+        interpreter.interpret(
+          transcript,
+          history: history,
+          semanticIntentId: semanticIntentId,
+          semanticConfidence: semanticConfidence,
+        );
+    if (lockedIntentId != null) {
+      interpretation = _lockIntent(interpretation, lockedIntentId);
+    }
+
+    final family = _responseFamily(
+      library,
+      interpretation,
+      preferences,
+      excludedLineIds,
     );
     final ranked = <ConversationSuggestion>[];
-    for (final line in library) {
-      if (!_allowed(line, preferences)) continue;
+    for (final line in family) {
       final scored = _score(line, interpretation, preferences);
-      if (scored.score > 8) ranked.add(scored);
+      final precise = line.topics.contains(interpretation.primaryIntentId);
+      final shared = _isSharedFamily(line, interpretation);
+      final relevanceBonus = precise ? 200.0 : (shared ? 60.0 : 30.0);
+      ranked.add(scored.copyWith(
+        score: scored.score + relevanceBonus,
+        reasons: <String>[
+          ...scored.reasons,
+          if (precise)
+            'preciseIntent'
+          else if (shared)
+            'sharedResponseFamily'
+          else
+            'legacyIntentFamily',
+        ],
+      ));
     }
     ranked.sort((a, b) {
       final scoreOrder = b.score.compareTo(a.score);
       return scoreOrder != 0 ? scoreOrder : a.line.id.compareTo(b.line.id);
     });
 
-    final selected = _selectDiverse(ranked, limit);
+    final selected = _buildResponseReel(ranked, limit);
     var usedFallback = false;
     final lowRecognitionConfidence = transcriptionConfidence != null &&
         // speech_to_text uses 0 when a platform supplies no confidence.
@@ -68,7 +100,8 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
     if (uncertainIntent || lowRecognitionConfidence) {
       selected.clear();
     }
-    if (selected.length < limit) {
+    if (selected.isEmpty &&
+        (uncertainIntent || lowRecognitionConfidence)) {
       usedFallback = true;
       for (final line in _safeFallbacks(library, preferences)) {
         if (selected.any((item) => item.line.id == line.id)) continue;
@@ -89,7 +122,114 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
       lowRecognitionConfidence: lowRecognitionConfidence,
       candidateCount:
           ranked.length > selected.length ? ranked.length : selected.length,
+      reelIntentId: interpretation.primaryIntentId,
+      excludedAlreadyShown: excludedLineIds.length,
+      moreGeneration: moreGeneration,
     );
+  }
+
+  ConversationInterpretation _lockIntent(
+    ConversationInterpretation interpretation,
+    String intentId,
+  ) {
+    ConversationIntentMatch? locked;
+    for (final match in interpretation.intentMatches) {
+      if (match.id == intentId) {
+        locked = ConversationIntentMatch(
+          definition: match.definition,
+          confidence: match.confidence,
+          reasons: <String>{...match.reasons, 'activeIntent'}.toList(),
+        );
+        break;
+      }
+    }
+    if (locked == null) {
+      for (final definition in interpreter.intentMatcher.catalog) {
+        if (definition.id != intentId) continue;
+        locked = ConversationIntentMatch(
+          definition: definition,
+          confidence: interpretation.intentConfidence,
+          reasons: const <String>['activeIntent'],
+        );
+        break;
+      }
+    }
+    if (locked == null) return interpretation;
+    return ConversationInterpretation(
+      language: interpretation.language,
+      intents: interpretation.intents,
+      topics: interpretation.topics,
+      tokens: interpretation.tokens,
+      isQuestion: interpretation.isQuestion,
+      confidence: locked.confidence,
+      intentMatches: <ConversationIntentMatch>[
+        locked,
+        ...interpretation.intentMatches.where((match) => match.id != intentId),
+      ],
+    );
+  }
+
+  List<OpenerLine> _responseFamily(
+    List<OpenerLine> library,
+    ConversationInterpretation interpretation,
+    ConversationPreferences preferences,
+    Set<String> excludedLineIds,
+  ) {
+    final intent = interpretation.primaryIntent;
+    if (intent == null) return const <OpenerLine>[];
+    final allowed = library
+        .where((line) => _allowed(line, preferences))
+        .toList(growable: false);
+    final hasPreciseFamily = allowed.any(
+      (line) => line.topics.contains(intent.id),
+    );
+    final available = allowed.where(
+      (line) => !excludedLineIds.contains(line.id),
+    );
+    if (hasPreciseFamily) {
+      return available
+          .where((line) => line.topics.contains(intent.id))
+          .toList(growable: false);
+    }
+    return available
+        .where((line) => _hintMatchCount(line, intent) > 0)
+        .toList(growable: false);
+  }
+
+  static const Set<String> _sharedResponseFamilies = <String>{
+    'ask_back',
+    'playful_question_reversal',
+    'interest_probe',
+    'conversation_hook',
+    'future_hook',
+    'contact_hook',
+  };
+
+  bool _isSharedFamily(
+    OpenerLine line,
+    ConversationInterpretation interpretation,
+  ) {
+    final intent = interpretation.primaryIntent;
+    if (intent == null) return false;
+    return line.topics.any(
+      (topic) =>
+          _sharedResponseFamilies.contains(topic) &&
+          intent.definition.responseHints.contains(topic),
+    );
+  }
+
+  int _hintMatchCount(OpenerLine line, ConversationIntentMatch intent) {
+    final lineText = <String>[
+      line.japaneseText,
+      line.englishMeaning ?? '',
+      line.koreanText ?? '',
+      ...line.topics,
+    ].join(' ').toLowerCase();
+    return intent.definition.responseHints.where((hint) {
+      if (hint == 'statement' || hint == 'comeback') return false;
+      final normalized = hint.toLowerCase();
+      return lineText.contains(normalized) || line.topics.contains(normalized);
+    }).length;
   }
 
   bool _allowed(OpenerLine line, ConversationPreferences preferences) {
@@ -202,41 +342,73 @@ class ConversationResponseEngine implements ConversationSuggestionProvider {
     return ConversationSuggestion(line: line, score: score, reasons: reasons);
   }
 
-  List<ConversationSuggestion> _selectDiverse(
+  List<ConversationSuggestion> _buildResponseReel(
     List<ConversationSuggestion> ranked,
     int limit,
   ) {
     final selected = <ConversationSuggestion>[];
-    final usedStyles = <String>{};
-    for (final candidate in ranked) {
-      final style = _styleKey(candidate.line);
-      if (selected.isNotEmpty && usedStyles.contains(style)) continue;
-      selected.add(candidate);
-      usedStyles.add(style);
-      if (selected.length == limit) return selected;
-    }
-    for (final candidate in ranked) {
-      if (selected.any((item) => item.line.id == candidate.line.id)) continue;
-      selected.add(candidate);
-      if (selected.length == limit) break;
+    for (final slot in ConversationReelSlot.values.take(limit)) {
+      final available = ranked.where((candidate) {
+        if (selected.any((item) => item.line.id == candidate.line.id)) {
+          return false;
+        }
+        return !selected.any(
+          (item) => _effectivelySame(item.line, candidate.line),
+        );
+      }).toList();
+      if (available.isEmpty) break;
+      available.sort((a, b) {
+        final aScore = a.score + _slotAffinity(a.line, slot);
+        final bScore = b.score + _slotAffinity(b.line, slot);
+        final scoreOrder = bScore.compareTo(aScore);
+        return scoreOrder != 0 ? scoreOrder : a.line.id.compareTo(b.line.id);
+      });
+      selected.add(available.first.copyWith(slot: slot));
     }
     return selected;
   }
 
-  String _styleKey(OpenerLine line) {
-    if (line.tones.contains(Tone.safe) || line.tones.contains(Tone.friendly)) {
-      return 'natural';
+  double _slotAffinity(OpenerLine line, ConversationReelSlot slot) {
+    final preferred = switch (slot) {
+      ConversationReelSlot.standard =>
+        <Tone>{Tone.safe, Tone.friendly, Tone.situational},
+      ConversationReelSlot.funny =>
+        <Tone>{Tone.humorous, Tone.witty, Tone.playful, Tone.teasing},
+      ConversationReelSlot.flirty =>
+        <Tone>{Tone.flirty, Tone.confident, Tone.romantic, Tone.teasing},
+    };
+    final matches = line.tones.intersection(preferred).length;
+    var affinity = matches * 45.0;
+    if (slot == ConversationReelSlot.standard &&
+        line.usageType == ConversationUsageType.statement) {
+      affinity += 15;
     }
-    if (line.tones.contains(Tone.witty) ||
-        line.tones.contains(Tone.humorous)) {
-      return 'funny';
+    if (slot != ConversationReelSlot.standard &&
+        line.usageType == ConversationUsageType.comeback) {
+      affinity += 10;
     }
-    if (line.tones.contains(Tone.flirty) ||
-        line.tones.contains(Tone.romantic)) {
-      return 'flirty';
-    }
-    if (line.tones.contains(Tone.classy)) return 'gentleman';
-    return 'bold';
+    return affinity;
+  }
+
+  bool _effectivelySame(OpenerLine left, OpenerLine right) {
+    return _responseSignature(left.japaneseText) ==
+        _responseSignature(right.japaneseText);
+  }
+
+  String _responseSignature(String value) {
+    var normalized = value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[（(]\s*(?:笑|爆笑|苦笑|w+)\s*[）)]'), '')
+        .replaceAll(
+          RegExp(r'[^a-z0-9\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+'),
+          '',
+        );
+    normalized = normalized.replaceFirst(RegExp(r'いません$'), 'いない');
+    normalized = normalized.replaceFirst(
+      RegExp(r'(?:です|ます|ですよ|ですね|ません|だよ|だね|よ|ね)$'),
+      '',
+    );
+    return normalized;
   }
 
   Set<Tone> _tonesFor(ConversationToneBias bias) => switch (bias) {

@@ -12,6 +12,7 @@ import 'package:opencue/domain/enums/enums.dart';
 import 'package:opencue/domain/models/app_settings.dart';
 import 'package:opencue/domain/speech/speech_controller.dart';
 import 'package:opencue/domain/speech/speech_service.dart';
+import 'package:opencue/domain/speech/tts_text_sanitizer.dart';
 
 /// A controllable fake. Records calls and lets a test hold an utterance "open"
 /// so the mid-playback rules can be exercised deterministically.
@@ -105,6 +106,52 @@ void main() {
   });
 
   group('playback', () {
+    test('display text keeps emoji while Japanese TTS omits it', () async {
+      final fake = FakeSpeechService();
+      final controller = SpeechController(fake);
+      const displayText = 'いいですね😊';
+
+      await controller.toggleJapanese(
+        lineId: 'emoji-jp',
+        japaneseText: displayText,
+      );
+
+      expect(displayText, 'いいですね😊');
+      expect(fake.spoken.single, 'いいですね');
+    });
+
+    test('parenthetical laughter is visual-only for TTS', () async {
+      final fake = FakeSpeechService();
+      final controller = SpeechController(fake);
+
+      await controller.toggleJapanese(
+        lineId: 'laugh-jp',
+        japaneseText: 'いないですよ。面接ですか？（笑）',
+      );
+
+      expect(fake.spoken.single, 'いないですよ。面接ですか？');
+    });
+
+    test('Korean TTS uses the same emoji sanitizer', () async {
+      final fake = FakeSpeechService();
+      final controller = SpeechController(fake);
+
+      await controller.toggleKorean(
+        lineId: 'emoji-ko',
+        koreanText: '좋네요✨👍🏽',
+      );
+
+      expect(fake.spoken.single, '좋네요');
+    });
+
+    test('joined, flag, keycap, selector, and modifier sequences vanish', () {
+      const sanitizer = TtsTextSanitizer();
+      expect(
+        sanitizer.sanitize('確認👨‍👩‍👧‍👦🇯🇵1️⃣❤️👍🏽しました。'),
+        '確認しました。',
+      );
+    });
+
     test('speaks only the Japanese it is given, tagged ja-JP', () async {
       final fake = FakeSpeechService();
       final controller = SpeechController(fake);

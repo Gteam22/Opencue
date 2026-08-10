@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/opener_line.dart';
+import '../speech/tts_text_sanitizer.dart';
 import 'conversation_models.dart';
 import 'conversation_recognition_service.dart';
 import 'conversation_response_engine.dart';
@@ -68,6 +69,8 @@ class ConversationAssistController extends ChangeNotifier {
   String? _lastFinalizedNormalized;
   DateTime? _lastFinalizedAt;
   String? _activeCueTranscript;
+  String? _activeIntentId;
+  final Set<String> _shownResponseIds = <String>{};
   int _cueRevision = 0;
 
   static const Duration noSpeechTimeout = Duration(seconds: 10);
@@ -85,6 +88,8 @@ class ConversationAssistController extends ChangeNotifier {
       List.unmodifiable(_feedback);
   ConversationPipelineDiagnostics? get diagnostics => _diagnostics;
   int get cueRevision => _cueRevision;
+  String? get activeIntentId => _activeIntentId;
+  Set<String> get shownResponseIds => Set.unmodifiable(_shownResponseIds);
   bool get isListening => _phase == ConversationAssistPhase.listening;
 
   Future<void> prepare() async {
@@ -161,7 +166,7 @@ class ConversationAssistController extends ChangeNotifier {
   void setPreferences(ConversationPreferences value) {
     preferences = value;
     notifyListeners();
-    _rerankActiveCue();
+    _rerankActiveCue(moreGeneration: false);
   }
 
   /// The single entry point for completed speech and confirmed manual edits.
@@ -311,7 +316,11 @@ class ConversationAssistController extends ChangeNotifier {
     if (relevant) {
       _result = nextResult;
       _activeCueTranscript = trimmed;
+      _activeIntentId = intentId;
       _sourceConfidence = transcriptionConfidence;
+      _shownResponseIds
+        ..clear()
+        ..addAll(nextResult.suggestions.map((item) => item.line.id));
       _cueRevision++;
       final ids = nextResult.suggestions.map((item) => item.line.id);
       _remember(ids);
@@ -343,6 +352,11 @@ class ConversationAssistController extends ChangeNotifier {
         for (final suggestion in nextResult.suggestions)
           suggestion.line.id: suggestion.score,
       },
+      reelSlotLineIds: _slotLineIds(nextResult),
+      excludedAlreadyShown: nextResult.excludedAlreadyShown,
+      moreGeneration: nextResult.moreGeneration,
+      displayTexts: _displayTexts(nextResult),
+      ttsTexts: _ttsTexts(nextResult),
     );
     _setPhase(_result == null
         ? ConversationAssistPhase.idle
@@ -351,12 +365,18 @@ class ConversationAssistController extends ChangeNotifier {
   }
 
   void more() {
-    _rerankActiveCue();
+    _rerankActiveCue(moreGeneration: true);
   }
 
-  void _rerankActiveCue() {
+  void _rerankActiveCue({required bool moreGeneration}) {
     final active = _activeCueTranscript;
-    if (active == null || active.isEmpty || _library.isEmpty) return;
+    final activeIntent = _activeIntentId;
+    if (active == null ||
+        active.isEmpty ||
+        activeIntent == null ||
+        _library.isEmpty) {
+      return;
+    }
     final next = responseEngine.suggest(
       transcript: active,
       library: _library,
@@ -365,17 +385,57 @@ class ConversationAssistController extends ChangeNotifier {
       ),
       history: _history,
       transcriptionConfidence: _sourceConfidence,
+      lockedIntentId: activeIntent,
+      excludedLineIds: _shownResponseIds,
+      moreGeneration: moreGeneration,
+      activeInterpretation: _result?.interpretation,
     );
-    if (!_isRelevant(next)) return;
+    if (!_isRelevant(next) ||
+        next.interpretation.primaryIntentId != activeIntent) {
+      return;
+    }
     _result = next;
     _cueRevision++;
     final ids = next.suggestions.map((item) => item.line.id);
+    _shownResponseIds.addAll(ids);
     _remember(ids);
     for (final id in ids) {
       _recordFeedback(id, SuggestionFeedbackKind.shown);
     }
+    _diagnostics = _diagnostics?.copyWith(
+      responsesFound: next.candidateCount,
+      responsesDisplayed: next.suggestions.length,
+      topResponseScores: <String, double>{
+        for (final suggestion in next.suggestions)
+          suggestion.line.id: suggestion.score,
+      },
+      reelSlotLineIds: _slotLineIds(next),
+      excludedAlreadyShown: next.excludedAlreadyShown,
+      moreGeneration: moreGeneration,
+      displayTexts: _displayTexts(next),
+      ttsTexts: _ttsTexts(next),
+    );
     _setPhase(ConversationAssistPhase.suggestions);
   }
+
+  Map<String, String> _slotLineIds(ConversationSuggestionResult result) =>
+      <String, String>{
+        for (final suggestion in result.suggestions)
+          (suggestion.slot?.name ?? 'fallback'): suggestion.line.id,
+      };
+
+  Map<String, String> _displayTexts(ConversationSuggestionResult result) =>
+      <String, String>{
+        for (final suggestion in result.suggestions)
+          suggestion.line.id: suggestion.line.japaneseText,
+      };
+
+  Map<String, String> _ttsTexts(ConversationSuggestionResult result) =>
+      <String, String>{
+        for (final suggestion in result.suggestions)
+          suggestion.line.id: const TtsTextSanitizer()
+              .sanitize(suggestion.line.japaneseText),
+      };
 
   bool _isRelevant(ConversationSuggestionResult candidate) {
     final intent = candidate.interpretation.primaryIntent;

@@ -3,6 +3,7 @@ library;
 import 'package:flutter/foundation.dart';
 
 import 'speech_service.dart';
+import 'tts_text_sanitizer.dart';
 
 /// Owns "which line is speaking", so no cue widget carries playback logic.
 ///
@@ -13,9 +14,13 @@ import 'speech_service.dart';
 /// (starting a new one stops the old), the playing line can be stopped, and the
 /// visual indicator is just whichever button matches [speakingLineId].
 class SpeechController extends ChangeNotifier {
-  SpeechController(this._service);
+  SpeechController(
+    this._service, {
+    this.sanitizer = const TtsTextSanitizer(),
+  });
 
   final SpeechService _service;
+  final TtsTextSanitizer sanitizer;
 
   String? _speakingLineId;
   String? _speakingKey;
@@ -111,7 +116,8 @@ class SpeechController extends ChangeNotifier {
     required String languageCode,
     required double rate,
   }) async {
-    if (!_service.isSupported || text.trim().isEmpty) return;
+    final speechText = sanitizer.sanitize(text);
+    if (!_service.isSupported || speechText.isEmpty) return;
 
     final speakingKey = '$languageCode:$lineId';
 
@@ -129,7 +135,7 @@ class SpeechController extends ChangeNotifier {
     _speakingKey = speakingKey;
     notifyListeners();
 
-    await _service.speak(text, languageCode: languageCode, rate: rate);
+    await _service.speak(speechText, languageCode: languageCode, rate: rate);
 
     // Only clear if no newer request has come in while this one was speaking.
     if (generation == _generation && _speakingKey == speakingKey) {
