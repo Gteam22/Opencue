@@ -531,6 +531,19 @@ class RecommendationEngine {
       case LineCategory.withOneFriend:
       case LineCategory.contactExchange:
       case LineCategory.gracefulExit:
+      // Manual conversation-library categories are not location categories.
+      // Their lines are excluded before scoring, but keeping them explicit
+      // here makes the enum switch exhaustive and documents the boundary.
+      case LineCategory.playful:
+      case LineCategory.flirty:
+      case LineCategory.witty:
+      case LineCategory.gentleman:
+      case LineCategory.questions:
+      case LineCategory.kissing:
+      case LineCategory.naughty:
+      case LineCategory.intimate:
+      case LineCategory.games:
+      case LineCategory.comebacks:
         return false;
     }
   }
