@@ -196,12 +196,8 @@ class OpenerLine {
     }
     if (tones.isEmpty) errors.add('validation.toneRequired');
     if (manualOnly) {
-      if ((englishMeaning ?? '').trim().isEmpty) {
-        errors.add('validation.englishRequired');
-      }
-      if ((koreanText ?? '').trim().isEmpty) {
-        errors.add('validation.koreanRequired');
-      }
+      // Curated source libraries may be Japanese-only. English and Korean
+      // remain optional display metadata; never fabricate missing translations.
       if (boldness == null) errors.add('validation.boldnessRequired');
       if (usageType == null) errors.add('validation.usageTypeRequired');
     }

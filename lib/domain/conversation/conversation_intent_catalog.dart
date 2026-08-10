@@ -1,8 +1,14 @@
 import 'conversation_intent.dart';
+import 'generated_first_meeting_intents.dart';
+
+export 'generated_first_meeting_intents.dart'
+    show
+        generatedFirstMeetingIntentCount,
+        generatedFirstMeetingSourceQuestionCount;
 
 /// High-value, data-only conversational intents. Adding coverage means adding
 /// a row here; matching and UI code remain unchanged.
-final List<ConversationIntentDefinition> conversationIntentCatalog =
+final List<ConversationIntentDefinition> _baseConversationIntentCatalog =
     <ConversationIntentDefinition>[
   // Compliments (18)
   _i('compliment_eyes', 'Compliments eyes, eye colour, or gaze',
@@ -102,8 +108,8 @@ final List<ConversationIntentDefinition> conversationIntentCatalog =
       ['日本', 'なんで', '理由', '来た'], {'japanese', 'travel'}),
   _q('relationship_status', 'Asks if the user has a partner',
       ['彼女いますか', '彼女いるの', '恋人いますか', '付き合ってる人います',
-        '今フリーですか'],
-      ['彼女', '彼氏', '恋人', '付き合ってる', 'フリー', 'いる'],
+        'パートナーはいますか'],
+      ['彼女', '彼氏', '恋人', '付き合ってる', 'パートナー', 'いる'],
       {'relationships', 'dating'}, priority: 98),
   _q('ask_married', 'Asks if the user is married',
       ['結婚してるの', '既婚ですか', 'Are you married'],
@@ -410,6 +416,56 @@ final List<ConversationIntentDefinition> conversationIntentCatalog =
       ['本', '読む', '小説', '好き'], {'books', 'hobbies'}),
 ];
 
+/// One runtime catalog assembled from the long-standing seed and the generated
+/// first-meeting source. Shared IDs are merged instead of creating a parallel
+/// matcher or silently replacing hand-tuned coverage.
+final List<ConversationIntentDefinition> conversationIntentCatalog =
+    _mergeIntentCatalog(
+  _baseConversationIntentCatalog,
+  generatedFirstMeetingIntents,
+);
+
+List<ConversationIntentDefinition> _mergeIntentCatalog(
+  List<ConversationIntentDefinition> base,
+  List<ConversationIntentDefinition> additions,
+) {
+  final byId = <String, ConversationIntentDefinition>{
+    for (final intent in base) intent.id: intent,
+  };
+  for (final addition in additions) {
+    final existing = byId[addition.id];
+    if (existing == null) {
+      byId[addition.id] = addition;
+      continue;
+    }
+    byId[addition.id] = ConversationIntentDefinition(
+      id: existing.id,
+      description: existing.description,
+      examples: <String>{...existing.examples, ...addition.examples}.toList(),
+      keywords: <String>{...existing.keywords, ...addition.keywords}.toList(),
+      exclusions:
+          <String>{...existing.exclusions, ...addition.exclusions}.toList(),
+      function: addition.function,
+      contextTags: <String>{
+        ...existing.contextTags,
+        ...addition.contextTags,
+      },
+      responseHints: <String>{
+        ...existing.responseHints,
+        ...addition.responseHints,
+      }.toList(),
+      priority: existing.priority > addition.priority
+          ? existing.priority
+          : addition.priority,
+      confidenceThreshold:
+          existing.confidenceThreshold > addition.confidenceThreshold
+              ? existing.confidenceThreshold
+              : addition.confidenceThreshold,
+    );
+  }
+  return List<ConversationIntentDefinition>.unmodifiable(byId.values);
+}
+
 ConversationIntentDefinition _q(
   String id,
   String description,
@@ -523,7 +579,7 @@ ConversationIntentDefinition _i(
   return ConversationIntentDefinition(
     id: id,
     description: description,
-    examples: expandedExamples.take(5).toList(growable: false),
+    examples: List<String>.unmodifiable(expandedExamples),
     keywords: keywords,
     function: function,
     contextTags: tags,

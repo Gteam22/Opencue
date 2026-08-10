@@ -540,6 +540,14 @@ class _PipelineDiagnosticsCard extends StatelessWidget {
       ('Displayed', '${diagnostics.responsesDisplayed}'),
       ('Action', diagnostics.action.name),
       ('Source', diagnostics.source.name),
+      ('Matcher reasons', diagnostics.matcherReasons.join(', ')),
+      ('Response hints', diagnostics.responseHints.join(', ')),
+      (
+        'Top response scores',
+        diagnostics.topResponseScores.entries
+            .map((entry) => '${entry.key}: ${entry.value.toStringAsFixed(1)}')
+            .join(', '),
+      ),
     ];
     return SectionCard(
       title: strings.t('assist.pipelineDiagnostics'),

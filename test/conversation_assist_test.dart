@@ -61,15 +61,15 @@ void main() {
     const matcher = ConversationIntentMatcher();
     const interpreter = ConversationInterpreter();
 
-    test('ships at least 100 maintainable high-value intents', () {
-      expect(conversationIntentCatalog.length, greaterThanOrEqualTo(100));
+    test('ships the unified maintainable high-value intent catalog', () {
+      expect(conversationIntentCatalog.length, greaterThanOrEqualTo(200));
       expect(
         conversationIntentCatalog.map((intent) => intent.id).toSet().length,
         conversationIntentCatalog.length,
       );
       expect(
         conversationIntentCatalog.every((intent) =>
-            intent.examples.length >= 5 && intent.responseHints.length >= 5),
+            intent.examples.length >= 2 && intent.responseHints.length >= 3),
         isTrue,
       );
     });
@@ -332,7 +332,7 @@ void main() {
         preferences: const ConversationPreferences(),
       );
       expect(controller.result!.interpretation.primaryIntentId,
-          'relationship_status');
+          'single_status');
     });
 
     test('installed library contains speakable relationship replies', () {
@@ -412,10 +412,13 @@ void main() {
         source: FinalizedUtteranceSource.manual,
       );
       expect(controller.result!.interpretation.primaryIntentId,
-          'relationship_status');
+          'single_status');
       expect(controller.diagnostics!.source,
           FinalizedUtteranceSource.manual);
       expect(controller.diagnostics!.action, CueUpdateAction.updated);
+      expect(controller.diagnostics!.matcherReasons, isNotEmpty);
+      expect(controller.diagnostics!.responseHints, contains('single_status'));
+      expect(controller.diagnostics!.topResponseScores, isNotEmpty);
     });
 
     test('semantic fallback can supply a structured catalog intent', () async {

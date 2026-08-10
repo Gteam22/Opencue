@@ -174,6 +174,9 @@ class ConversationPipelineDiagnostics {
     required this.action,
     required this.source,
     required this.createdAt,
+    this.matcherReasons = const <String>[],
+    this.responseHints = const <String>[],
+    this.topResponseScores = const <String, double>{},
   });
 
   final String rawTranscript;
@@ -187,6 +190,9 @@ class ConversationPipelineDiagnostics {
   final CueUpdateAction action;
   final FinalizedUtteranceSource source;
   final DateTime createdAt;
+  final List<String> matcherReasons;
+  final List<String> responseHints;
+  final Map<String, double> topResponseScores;
 }
 
 class ConversationSuggestionFeedback {

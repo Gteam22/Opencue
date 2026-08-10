@@ -152,6 +152,33 @@ void main() {
       expect(await stack.service.seedIfEmpty(), 0);
       expect(await stack.service.lines.count(), 1);
     });
+
+    test('conversation upgrade removes superseded provisional cue rows',
+        () async {
+      final stack = await TestStack.create();
+      addTearDown(stack.dispose);
+      for (var index = 13; index <= 18; index++) {
+        await stack.service.lines.insert(line(
+          'conversation-playful-${index.toString().padLeft(3, '0')}',
+          japanese: 'retired $index',
+        ));
+      }
+
+      expect(await stack.service.installConversationLibrary(), 652);
+      final ids = await stack.service.lines.existingIds();
+      expect(ids, hasLength(652));
+      expect(
+        ids.intersection(<String>{
+          'conversation-playful-013',
+          'conversation-playful-014',
+          'conversation-playful-015',
+          'conversation-playful-016',
+          'conversation-playful-017',
+          'conversation-playful-018',
+        }),
+        isEmpty,
+      );
+    });
   });
 
   group('restore starter library', () {

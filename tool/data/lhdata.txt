@@ -435,15 +435,3 @@ For this style, the strongest phrases are usually not explicit at all. Things li
 「僕は礼儀正しいですよ。想像まで礼儀正しいとは言ってませんけど。」
 「キスしたくなる距離ってありますよね。今くらいの。」
 「本当に欲しいものほど、急がない方がいいんですよ。」
-
-Core cue responses when asked relationship status
-Japanese	English	Korean
-今はいないですよ。	I’m not seeing anyone right now.	지금은 만나는 사람 없어요.
-いないですよ。面接ですか？笑	No. Is this an interview?	없어요. 면접인가요? ㅋㅋ
-今はフリーです。なんで気になったんですか？笑	I’m single right now. Why are you curious?	지금은 솔로예요. 왜 궁금해요? ㅋㅋ
-
-Core cue responses when asked time in Japan
-Japanese	English	Korean
-けっこう長いですよ。	I’ve been here quite a while.	꽤 오래됐어요.
-まだそんなに長くないですよ。	I haven’t been here that long yet.	아직 그렇게 오래되진 않았어요.
-いつからだと思います？笑	When do you think I came here?	언제부터였을 것 같아요? ㅋㅋ

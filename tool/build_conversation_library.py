@@ -23,10 +23,15 @@ import korean_romanize  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE = os.path.join(ROOT, 'tool', 'data', 'lhdata.txt')
+FIRST_MEETING_SOURCE = os.path.join(
+    ROOT, 'tool', 'data', 'first_meeting_library.json')
 JSON_OUT = os.path.join(ROOT, 'assets', 'sample',
                         'conversation_library.json')
 DART_OUT = os.path.join(ROOT, 'lib', 'data', 'seed',
                         'conversation_library.dart')
+INTENT_DART_OUT = os.path.join(
+    ROOT, 'lib', 'domain', 'conversation',
+    'generated_first_meeting_intents.dart')
 
 
 def _slug(text):
@@ -254,11 +259,144 @@ def build(records):
     return lines, duplicate_count
 
 
+def _merge_lines(legacy_lines, first_meeting_lines):
+    """Merge authored sources without introducing a second runtime format."""
+    by_japanese = {}
+    ordered = []
+    duplicate_count = 0
+    for line in legacy_lines + first_meeting_lines:
+        japanese = line['japaneseText'].strip()
+        existing = by_japanese.get(japanese)
+        if existing is None:
+            normalized = dict(line)
+            normalized.setdefault('isFavorite', False)
+            normalized.setdefault('isUserCreated', False)
+            normalized.setdefault('timesShown', 0)
+            normalized.setdefault('timesUsed', 0)
+            normalized.setdefault('positiveResults', 0)
+            normalized.setdefault('neutralResults', 0)
+            normalized.setdefault('negativeResults', 0)
+            by_japanese[japanese] = normalized
+            ordered.append(normalized)
+            continue
+
+        duplicate_count += 1
+        existing['topics'] = sorted(set(existing.get('topics', ())) |
+                                    set(line.get('topics', ())))
+        existing['tones'] = sorted(set(existing.get('tones', ())) |
+                                   set(line.get('tones', ())))
+        if not existing.get('englishMeaning') and line.get('englishMeaning'):
+            existing['englishMeaning'] = line['englishMeaning']
+        if not existing.get('translations') and line.get('translations'):
+            existing['translations'] = line['translations']
+        if not existing.get('koreanRomanization') and \
+                line.get('koreanRomanization'):
+            existing['koreanRomanization'] = line['koreanRomanization']
+    return ordered, duplicate_count
+
+
+def _dart_string(value):
+    escaped = (value.replace('\\', '\\\\')
+               .replace("'", "\\'")
+               .replace('$', r'\$')
+               .replace('\r', r'\r')
+               .replace('\n', r'\n'))
+    return "'%s'" % escaped
+
+
+def _dart_string_list(values):
+    return '<String>[%s]' % ', '.join(_dart_string(value) for value in values)
+
+
+def _dart_collection_lines(field, values, collection='list'):
+    opener, closer = ('<String>[', ']') if collection == 'list' else \
+        ('<String>{', '}')
+    output = ['    %s: %s' % (field, opener)]
+    output.extend('      %s,' % _dart_string(value) for value in values)
+    output.append('    %s,' % closer)
+    return output
+
+
+def _dart_description_lines(value):
+    # Adjacent Dart string literals concatenate at compile time.
+    chunks = [value[index:index + 48] for index in range(0, len(value), 48)]
+    if len(chunks) == 1:
+        return ['    description: %s,' % _dart_string(value)]
+    return [
+        '    description:',
+        *['      %s' % _dart_string(chunk) for chunk in chunks[:-1]],
+        '      %s,' % _dart_string(chunks[-1]),
+    ]
+
+
+def _write_generated_intents(intents, source_question_count):
+    functions = {
+        'question': 'question',
+        'compliment': 'compliment',
+        'tease': 'tease',
+        'sharedInformation': 'sharedInformation',
+        'invitation': 'invitation',
+        'softRejection': 'softRejection',
+        'agreement': 'agreement',
+        'surprise': 'surprise',
+        'interest': 'interest',
+        'greeting': 'greeting',
+        'thanks': 'thanks',
+        'apology': 'apology',
+        'goodbye': 'goodbye',
+    }
+    output = [
+        '// GENERATED FILE. See tool/import_first_meeting_library.py and',
+        '// tool/build_conversation_library.py.',
+        "import 'conversation_intent.dart';",
+        '',
+        'const int generatedFirstMeetingSourceQuestionCount = %d;' %
+        source_question_count,
+        'const int generatedFirstMeetingIntentCount = %d;' % len(intents),
+        '',
+        'const List<ConversationIntentDefinition> generatedFirstMeetingIntents =',
+        '    <ConversationIntentDefinition>[',
+    ]
+    for intent in intents:
+        function = functions.get(intent['function'])
+        if function is None:
+            raise SystemExit('Unknown conversation function: %s' %
+                             intent['function'])
+        output.extend([
+            '  ConversationIntentDefinition(',
+            '    id: %s,' % _dart_string(intent['id']),
+            *_dart_description_lines(intent['description']),
+            *_dart_collection_lines('examples', intent['examples']),
+            *_dart_collection_lines('keywords', intent['keywords']),
+            *_dart_collection_lines('exclusions', intent['exclusions']),
+            '    function: ConversationFunction.%s,' % function,
+            *_dart_collection_lines(
+                'contextTags', intent['contextTags'], collection='set'),
+            *_dart_collection_lines('responseHints', intent['responseHints']),
+            '    priority: %d,' % intent['priority'],
+            '    confidenceThreshold: %s,' %
+            intent['confidenceThreshold'],
+            '  ),',
+        ])
+    output.append('];')
+    output.append('')
+    with open(INTENT_DART_OUT, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write('\n'.join(output))
+
+
 def main():
     records, ignored = parse_source(SOURCE)
-    lines, duplicates = build(records)
+    legacy_lines, duplicates = build(records)
+    with open(FIRST_MEETING_SOURCE, encoding='utf-8') as handle:
+        first_meeting = json.load(handle)
+    if first_meeting.get('sourceQuestionCount') != 129:
+        raise SystemExit('First-meeting source must contain 129 questions.')
+    lines, cross_source_duplicates = _merge_lines(
+        legacy_lines, first_meeting['lines'])
+    _write_generated_intents(
+        first_meeting['intents'], first_meeting['sourceQuestionCount'])
     payload = {
-        'schemaVersion': 1,
+        'schemaVersion': 2,
         'app': 'OpenCue',
         'kind': 'manualConversationLibrary',
         'manualBrowsingOnly': True,
@@ -282,8 +420,10 @@ def main():
 
     categories = Counter(line['category'] for line in lines)
     boldness = Counter(line['boldness'] for line in lines)
-    print('Conversation library: %d lines (%d exact duplicates removed).'
-          % (len(lines), duplicates))
+    print('Conversation library: %d lines (%d legacy exact duplicates and '
+          '%d cross-source Japanese duplicates removed).'
+          % (len(lines), duplicates, cross_source_duplicates))
+    print('First-meeting intents:', len(first_meeting['intents']))
     print('Categories:', dict(sorted(categories.items())))
     print('Boldness:', dict(sorted(boldness.items())))
     print('Narrative/source lines ignored:', len(ignored))

@@ -334,6 +334,15 @@ class ConversationAssistController extends ChangeNotifier {
           : CueUpdateAction.preservedIrrelevant,
       source: source,
       createdAt: now,
+      matcherReasons: nextResult.interpretation.primaryIntent?.reasons ??
+          const <String>[],
+      responseHints: nextResult
+              .interpretation.primaryIntent?.definition.responseHints ??
+          const <String>[],
+      topResponseScores: <String, double>{
+        for (final suggestion in nextResult.suggestions)
+          suggestion.line.id: suggestion.score,
+      },
     );
     _setPhase(_result == null
         ? ConversationAssistPhase.idle

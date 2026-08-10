@@ -40,6 +40,17 @@ class LibraryService {
   final StarterPresets _presetSeed;
   final IdGenerator _ids;
 
+  // Version 2 briefly shipped six provisional cue rows. Their content now
+  // lives in the structured first-meeting source under stable hashed IDs.
+  static const Set<String> _retiredConversationLineIds = <String>{
+    'conversation-playful-013',
+    'conversation-playful-014',
+    'conversation-playful-015',
+    'conversation-playful-016',
+    'conversation-playful-017',
+    'conversation-playful-018',
+  };
+
   /// Installs the starter library if the database has no lines at all.
   ///
   /// Returns the number of lines inserted, so a first run can be distinguished
@@ -58,8 +69,13 @@ class LibraryService {
   Future<int> installConversationLibrary() async {
     final starter = _conversationSeed.load();
     final existingIds = await lines.existingIds();
+    for (final id in _retiredConversationLineIds.intersection(existingIds)) {
+      await lines.delete(id);
+    }
     final missing = starter
-        .where((line) => !existingIds.contains(line.id))
+        .where((line) =>
+            !existingIds.contains(line.id) ||
+            _retiredConversationLineIds.contains(line.id))
         .toList();
     if (missing.isNotEmpty) await lines.insertMany(missing);
     return missing.length;

@@ -11,16 +11,23 @@ import 'package:opencue/l10n/app_localizations.dart';
 void main() {
   const loader = ConversationSeedLoader();
   final lines = loader.load(createdAt: DateTime.utc(2026));
+  final legacy = lines.where((line) => line.id.startsWith('conversation-'));
+  final firstMeeting =
+      lines.where((line) => line.id.startsWith('first-meeting-'));
 
   group('generated conversation dataset', () {
     test('loads all normalized multilingual records with unique ids', () {
-      expect(lines, hasLength(335));
+      expect(lines, hasLength(652));
+      expect(legacy, hasLength(329));
+      expect(firstMeeting, hasLength(323));
       expect(lines.map((line) => line.id).toSet(), hasLength(lines.length));
       for (final line in lines) {
         expect(line.japaneseText.trim(), isNotEmpty, reason: line.id);
-        expect(line.englishMeaning?.trim(), isNotEmpty, reason: line.id);
-        expect(line.koreanText?.trim(), isNotEmpty, reason: line.id);
-        expect(line.koreanRomanization?.trim(), isNotEmpty, reason: line.id);
+        if (line.id.startsWith('conversation-')) {
+          expect(line.englishMeaning?.trim(), isNotEmpty, reason: line.id);
+          expect(line.koreanText?.trim(), isNotEmpty, reason: line.id);
+          expect(line.koreanRomanization?.trim(), isNotEmpty, reason: line.id);
+        }
         expect(line.boldness, isNotNull, reason: line.id);
         expect(line.usageType, isNotNull, reason: line.id);
         expect(line.manualOnly, isTrue, reason: line.id);
@@ -30,9 +37,9 @@ void main() {
 
     test('category and boldness counts stay stable', () {
       int category(LineCategory value) =>
-          lines.where((line) => line.category == value).length;
+          legacy.where((line) => line.category == value).length;
       int boldness(ConversationBoldness value) =>
-          lines.where((line) => line.boldness == value).length;
+          legacy.where((line) => line.boldness == value).length;
 
       expect(category(LineCategory.comebacks), 30);
       expect(category(LineCategory.flirty), 34);
@@ -41,11 +48,11 @@ void main() {
       expect(category(LineCategory.intimate), 50);
       expect(category(LineCategory.kissing), 31);
       expect(category(LineCategory.naughty), 20);
-      expect(category(LineCategory.playful), 18);
+      expect(category(LineCategory.playful), 12);
       expect(category(LineCategory.questions), 13);
       expect(category(LineCategory.witty), 52);
 
-      expect(boldness(ConversationBoldness.light), 41);
+      expect(boldness(ConversationBoldness.light), 35);
       expect(boldness(ConversationBoldness.flirty), 185);
       expect(boldness(ConversationBoldness.naughty), 73);
       expect(boldness(ConversationBoldness.explicit), 36);
@@ -53,7 +60,7 @@ void main() {
 
     test('romanization is separate and contains no Hangul', () {
       final hangul = RegExp('[\uac00-\ud7a3]');
-      for (final line in lines) {
+      for (final line in legacy) {
         expect(hangul.hasMatch(line.koreanRomanization!), isFalse,
             reason: line.id);
         expect(line.koreanRomanization, isNot(line.koreanText));
