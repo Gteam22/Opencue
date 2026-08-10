@@ -26,7 +26,7 @@ class AppInfo {
   static const String databaseFileName = 'opencue.db';
 
   /// Bumping this requires a matching step in AppDatabase.onUpgrade.
-  static const int databaseVersion = 3;
+  static const int databaseVersion = 5;
 
   /// Version of the JSON import/export format. See lib/data/transfer.
   static const int transferSchemaVersion = 1;

@@ -59,6 +59,16 @@ dependencies:
   # permission screens depend on.
   permission_handler: ^11.3.1
 
+  # --- Text-to-speech --------------------------------------------------------
+  # Wraps the device's own TTS engine (no voice data ships in the app). Used
+  # only on Android, behind the SpeechService interface: FlutterTtsSpeechService
+  # is constructed exclusively where SpeechCapability.hasImplementation is true,
+  # and a conditional import keeps the plugin out of the web build entirely.
+  # The Windows build binds NullSpeechService and never compiles against it,
+  # which is what stops a TTS plugin from breaking the desktop build the way an
+  # earlier native plugin did.
+  flutter_tts: ^4.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

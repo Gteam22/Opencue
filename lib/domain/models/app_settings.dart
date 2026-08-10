@@ -5,6 +5,10 @@ import '../enums/enums.dart';
 class AppSettings {
   const AppSettings({
     this.languageMode = LanguageMode.bilingual,
+    this.showKoreanRomanization = true,
+    this.japaneseTtsEnabled = true,
+    this.koreanTtsEnabled = true,
+    this.speechRate = SpeechRatePreset.normal,
     this.themePreference = AppThemePreference.system,
     this.defaultDirectness = 2,
     this.includeHistoryInExport = false,
@@ -13,9 +17,29 @@ class AppSettings {
     this.radialHandedness = RadialHandedness.automatic,
     this.radialHapticsEnabled = true,
     this.radialTutorialSeen = false,
+    this.conversationLibraryVersion = 0,
   });
 
   final LanguageMode languageMode;
+
+  /// Whether an easy-to-read Roman reading is shown under each Korean line.
+  /// On by default: the audience for Korean lines is likely learning to
+  /// pronounce them.
+  final bool showKoreanRomanization;
+
+  /// Whether Japanese speak controls are shown on supported platforms.
+  final bool japaneseTtsEnabled;
+
+  /// Whether the speak-aloud button appears next to Korean lines. On by
+  /// default where the platform supports speech; independent of romanization,
+  /// so a user can read the Roman text with the button off, or hear the Korean
+  /// with the Roman text hidden.
+  final bool koreanTtsEnabled;
+
+  /// How fast a line is read. A named preset, not a raw number, so the setting
+  /// stays legible; the presets map to concrete rates in the presentation
+  /// layer.
+  final SpeechRatePreset speechRate;
   final AppThemePreference themePreference;
 
   /// Pre-selected directness on the situation builder.
@@ -47,10 +71,17 @@ class AppSettings {
   /// settings, so this is a "seen" flag rather than a "disabled" one.
   final bool radialTutorialSeen;
 
+  /// Internal content-migration marker. Not exposed as a preference.
+  final int conversationLibraryVersion;
+
   static const AppSettings defaults = AppSettings();
 
   AppSettings copyWith({
     LanguageMode? languageMode,
+    bool? showKoreanRomanization,
+    bool? japaneseTtsEnabled,
+    bool? koreanTtsEnabled,
+    SpeechRatePreset? speechRate,
     AppThemePreference? themePreference,
     int? defaultDirectness,
     bool? includeHistoryInExport,
@@ -59,9 +90,16 @@ class AppSettings {
     RadialHandedness? radialHandedness,
     bool? radialHapticsEnabled,
     bool? radialTutorialSeen,
+    int? conversationLibraryVersion,
   }) {
     return AppSettings(
       languageMode: languageMode ?? this.languageMode,
+      showKoreanRomanization:
+          showKoreanRomanization ?? this.showKoreanRomanization,
+      japaneseTtsEnabled:
+          japaneseTtsEnabled ?? this.japaneseTtsEnabled,
+      koreanTtsEnabled: koreanTtsEnabled ?? this.koreanTtsEnabled,
+      speechRate: speechRate ?? this.speechRate,
       themePreference: themePreference ?? this.themePreference,
       defaultDirectness:
           clampDirectness(defaultDirectness ?? this.defaultDirectness),
@@ -73,11 +111,17 @@ class AppSettings {
       radialHapticsEnabled:
           radialHapticsEnabled ?? this.radialHapticsEnabled,
       radialTutorialSeen: radialTutorialSeen ?? this.radialTutorialSeen,
+      conversationLibraryVersion:
+          conversationLibraryVersion ?? this.conversationLibraryVersion,
     );
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
         'languageMode': languageMode.name,
+        'showKoreanRomanization': showKoreanRomanization,
+        'japaneseTtsEnabled': japaneseTtsEnabled,
+        'koreanTtsEnabled': koreanTtsEnabled,
+        'speechRate': speechRate.name,
         'themePreference': themePreference.name,
         'defaultDirectness': defaultDirectness,
         'includeHistoryInExport': includeHistoryInExport,
@@ -86,11 +130,20 @@ class AppSettings {
         'radialHandedness': radialHandedness.name,
         'radialHapticsEnabled': radialHapticsEnabled,
         'radialTutorialSeen': radialTutorialSeen,
+        'conversationLibraryVersion': conversationLibraryVersion,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) {
     final raw = json['defaultDirectness'];
     return AppSettings(
+      showKoreanRomanization: json['showKoreanRomanization'] != false,
+      japaneseTtsEnabled: json['japaneseTtsEnabled'] != false,
+      koreanTtsEnabled: json['koreanTtsEnabled'] != false,
+      speechRate: enumFromNameOr(
+        SpeechRatePreset.values,
+        json['speechRate'],
+        SpeechRatePreset.normal,
+      ),
       languageMode: enumFromNameOr(
         LanguageMode.values,
         json['languageMode'],
@@ -115,12 +168,19 @@ class AppSettings {
       // the `== true` shorthand the other flags use.
       radialHapticsEnabled: json['radialHapticsEnabled'] != false,
       radialTutorialSeen: json['radialTutorialSeen'] == true,
+      conversationLibraryVersion:
+          _nonNegativeInt(json['conversationLibraryVersion']),
     );
   }
 
   /// Flat string map for the key/value settings table.
   Map<String, String> toStringMap() => <String, String>{
         'languageMode': languageMode.name,
+        'showKoreanRomanization':
+            showKoreanRomanization ? 'true' : 'false',
+        'japaneseTtsEnabled': japaneseTtsEnabled ? 'true' : 'false',
+        'koreanTtsEnabled': koreanTtsEnabled ? 'true' : 'false',
+        'speechRate': speechRate.name,
         'themePreference': themePreference.name,
         'defaultDirectness': '$defaultDirectness',
         'includeHistoryInExport': includeHistoryInExport ? 'true' : 'false',
@@ -129,10 +189,19 @@ class AppSettings {
         'radialHandedness': radialHandedness.name,
         'radialHapticsEnabled': radialHapticsEnabled ? 'true' : 'false',
         'radialTutorialSeen': radialTutorialSeen ? 'true' : 'false',
+        'conversationLibraryVersion': '$conversationLibraryVersion',
       };
 
   static AppSettings fromStringMap(Map<String, String> map) {
     return AppSettings(
+      showKoreanRomanization: map['showKoreanRomanization'] != 'false',
+      japaneseTtsEnabled: map['japaneseTtsEnabled'] != 'false',
+      koreanTtsEnabled: map['koreanTtsEnabled'] != 'false',
+      speechRate: enumFromNameOr(
+        SpeechRatePreset.values,
+        map['speechRate'],
+        SpeechRatePreset.normal,
+      ),
       languageMode: enumFromNameOr(
         LanguageMode.values,
         map['languageMode'],
@@ -155,9 +224,14 @@ class AppSettings {
       ),
       radialHapticsEnabled: map['radialHapticsEnabled'] != 'false',
       radialTutorialSeen: map['radialTutorialSeen'] == 'true',
+      conversationLibraryVersion:
+          _nonNegativeInt(map['conversationLibraryVersion']),
     );
   }
 
+  // conversationLibraryVersion is operational migration state, not a
+  // user-visible preference, so it intentionally does not affect value
+  // equality used by settings widgets.
   @override
   bool operator ==(Object other) =>
       other is AppSettings &&
@@ -177,4 +251,9 @@ class AppSettings {
         developerMode,
         retainScanImages,
       );
+}
+
+int _nonNegativeInt(Object? value) {
+  final parsed = value is int ? value : int.tryParse('$value') ?? 0;
+  return parsed < 0 ? 0 : parsed;
 }

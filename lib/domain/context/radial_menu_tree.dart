@@ -119,6 +119,16 @@ enum RadialCommand {
   savePreset,
   detailedEditor,
   openListFallback,
+  browseConversationPlayful,
+  browseConversationFlirty,
+  browseConversationWitty,
+  browseConversationGentleman,
+  browseConversationQuestions,
+  browseConversationKissing,
+  browseConversationNaughty,
+  browseConversationIntimate,
+  browseConversationGames,
+  browseConversationComebacks,
 }
 
 class RunCommand extends RadialSelectionAction {
@@ -199,15 +209,46 @@ RadialMenuNode buildRadialMenuTree() {
     id: 'root',
     labelKey: 'radial.root',
     iconId: 'root',
+    // The manual conversation library is a navigation sector, never a context
+    // signal. Selecting it cannot affect recommendation scoring.
     children: <RadialMenuNode>[
-      _place(),
+      _locationSector(),
       _people(),
-      _activity(),
-      _cue(),
-      _atmosphere(),
-      _tone(),
-      _caution(),
-      _finish(),
+      _loudness(),
+      _surroundings(),
+      _action(),
+      _other(),
+      _directness(),
+      _conversationLibrary(),
+    ],
+  );
+}
+
+RadialMenuNode _conversationLibrary() {
+  const entries = <(LineCategory, RadialCommand)>[
+    (LineCategory.playful, RadialCommand.browseConversationPlayful),
+    (LineCategory.flirty, RadialCommand.browseConversationFlirty),
+    (LineCategory.witty, RadialCommand.browseConversationWitty),
+    (LineCategory.gentleman, RadialCommand.browseConversationGentleman),
+    (LineCategory.questions, RadialCommand.browseConversationQuestions),
+    (LineCategory.kissing, RadialCommand.browseConversationKissing),
+    (LineCategory.naughty, RadialCommand.browseConversationNaughty),
+    (LineCategory.intimate, RadialCommand.browseConversationIntimate),
+    (LineCategory.games, RadialCommand.browseConversationGames),
+    (LineCategory.comebacks, RadialCommand.browseConversationComebacks),
+  ];
+  return RadialMenuNode(
+    id: 'conversation',
+    labelKey: 'radial.conversationLibrary',
+    iconId: 'flirting',
+    children: <RadialMenuNode>[
+      for (final entry in entries)
+        RadialMenuNode(
+          id: 'conversation.${entry.$1.name}',
+          labelKey: 'category.${entry.$1.name}',
+          iconId: 'conversation.${entry.$1.name}',
+          action: RunCommand(entry.$2),
+        ),
     ],
   );
 }
@@ -223,17 +264,24 @@ RadialMenuNode _venue(String id, VenueCategory venue, LocationTag tag,
       action: SetLocation(tag, venue: venue),
     );
 
-RadialMenuNode _location(LocationTag tag, String iconId) => RadialMenuNode(
-      id: 'place.tag.${tag.name}',
+/// A leaf for a broad [LocationTag].
+///
+/// [idSuffix] exists because a tag may legitimately appear in more than one
+/// group - a convenience store is both food and shopping - and node ids must
+/// stay unique for `pathTo` and the chip shortcuts to resolve.
+RadialMenuNode _location(LocationTag tag, String iconId,
+        {String idSuffix = ''}) =>
+    RadialMenuNode(
+      id: 'place.tag.${tag.name}$idSuffix',
       labelKey: 'location.${tag.name}',
       iconId: iconId,
       action: SetLocation(tag),
     );
 
-RadialMenuNode _place() {
+RadialMenuNode _locationSector() {
   return RadialMenuNode(
     id: 'place',
-    labelKey: 'radial.place',
+    labelKey: 'radial.location',
     iconId: 'place',
     children: <RadialMenuNode>[
       RadialMenuNode(
@@ -296,7 +344,8 @@ RadialMenuNode _place() {
         children: <RadialMenuNode>[
           _location(LocationTag.shoppingArea, 'shoppingArea'),
           _location(LocationTag.bookstore, 'bookstore'),
-          _location(LocationTag.convenienceStore, 'convenienceStore2'),
+          _location(LocationTag.convenienceStore, 'convenienceStore',
+              idSuffix: '.shopping'),
         ],
       ),
       RadialMenuNode(
@@ -408,10 +457,10 @@ RadialMenuNode _activityLeaf(ActivityTag tag) => RadialMenuNode(
       action: SetActivity(tag),
     );
 
-RadialMenuNode _activity() {
+RadialMenuNode _action() {
   return RadialMenuNode(
     id: 'activity',
-    labelKey: 'radial.activity',
+    labelKey: 'radial.action',
     iconId: 'activity',
     children: <RadialMenuNode>[
       RadialMenuNode(
@@ -476,10 +525,10 @@ RadialMenuNode _cueLeaf(ObservableCue cue) => RadialMenuNode(
       action: ToggleCue(cue),
     );
 
-RadialMenuNode _cue() {
+RadialMenuNode _surroundings() {
   return RadialMenuNode(
     id: 'cue',
-    labelKey: 'radial.cue',
+    labelKey: 'radial.surroundings',
     iconId: 'cue',
     allowMultipleSelection: true,
     children: <RadialMenuNode>[
@@ -541,71 +590,65 @@ RadialMenuNode _cue() {
 
 // --- Atmosphere ------------------------------------------------------------
 
-RadialMenuNode _atmosphere() {
+/// Loudness. One layer deep on purpose: there are only four levels, so
+/// wrapping them in a group would add a drag for nothing.
+///
+/// Crowd level and general mood, which an earlier brief also asked for, are
+/// still absent: `ContextSnapshot` has no field for either and the engine
+/// scores neither, so they would be controls wired to nothing.
+RadialMenuNode _loudness() {
   return RadialMenuNode(
     id: 'atmosphere',
-    labelKey: 'radial.atmosphere',
-    iconId: 'atmosphere',
+    labelKey: 'radial.loudness',
+    iconId: 'noise',
     children: <RadialMenuNode>[
-      RadialMenuNode(
-        id: 'atmosphere.noise',
-        labelKey: 'radial.atmosphere.noise',
-        iconId: 'noise',
-        children: <RadialMenuNode>[
-          for (final value in NoiseLevel.values)
-            RadialMenuNode(
-              id: 'atmosphere.noise.${value.name}',
-              labelKey: 'noiseLevel.${value.name}',
-              iconId: 'noiseLevel.${value.name}',
-              action: SetNoiseLevel(value),
-            ),
-        ],
-      ),
-      // Crowd level and general mood, which the brief also asks for, are not
-      // here: `ContextSnapshot` has no field for either and the engine scores
-      // neither. Adding an option the engine ignores would be a control that
-      // does nothing. See docs/RADIAL_MENU.md.
+      for (final value in NoiseLevel.values)
+        RadialMenuNode(
+          id: 'atmosphere.noise.${value.name}',
+          labelKey: 'noiseLevel.${value.name}',
+          iconId: 'noiseLevel.${value.name}',
+          action: SetNoiseLevel(value),
+        ),
     ],
   );
 }
 
 // --- Tone ------------------------------------------------------------------
 
-RadialMenuNode _tone() {
+/// Directness, its own root sector and one layer deep: five stops, reachable
+/// in a single outward drag.
+RadialMenuNode _directness() {
   return RadialMenuNode(
-    id: 'tone',
-    labelKey: 'radial.tone',
-    iconId: 'tone',
+    id: 'tone.directness',
+    labelKey: 'radial.directness',
+    iconId: 'directness',
     children: <RadialMenuNode>[
-      RadialMenuNode(
-        id: 'tone.register',
-        labelKey: 'radial.tone.register',
-        iconId: 'register',
-        allowMultipleSelection: true,
-        children: <RadialMenuNode>[
-          for (final value in Tone.values)
-            RadialMenuNode(
-              id: 'tone.register.${value.name}',
-              labelKey: 'tone.${value.name}',
-              iconId: 'tone.${value.name}',
-              action: ToggleTone(value),
-            ),
-        ],
-      ),
-      RadialMenuNode(
-        id: 'tone.directness',
-        labelKey: 'radial.tone.directness',
-        iconId: 'directness',
-        children: <RadialMenuNode>[
-          for (var level = kMinDirectness; level <= kMaxDirectness; level++)
-            RadialMenuNode(
-              id: 'tone.directness.$level',
-              labelKey: 'radial.directness.$level',
-              iconId: 'directness.$level',
-              action: SetDirectness(level),
-            ),
-        ],
-      ),
+      for (var level = kMinDirectness; level <= kMaxDirectness; level++)
+        RadialMenuNode(
+          id: 'tone.directness.$level',
+          labelKey: 'radial.directness.$level',
+          iconId: 'directness.$level',
+          action: SetDirectness(level),
+        ),
+    ],
+  );
+}
+
+/// Tone register, now reached through Other.
+RadialMenuNode _toneRegister() {
+  return RadialMenuNode(
+    id: 'tone.register',
+    labelKey: 'radial.tone.register',
+    iconId: 'register',
+    allowMultipleSelection: true,
+    children: <RadialMenuNode>[
+      for (final value in Tone.values)
+        RadialMenuNode(
+          id: 'tone.register.${value.name}',
+          labelKey: 'tone.${value.name}',
+          iconId: 'tone.${value.name}',
+          action: ToggleTone(value),
+        ),
     ],
   );
 }
@@ -638,12 +681,26 @@ RadialMenuNode _caution() {
 
 // --- Finish and presets ----------------------------------------------------
 
-RadialMenuNode _finish() {
-  return const RadialMenuNode(
+/// Other: everything that is not one of the six context dials.
+///
+/// Caution is deliberately the **first** child. Moving it off the root cost it
+/// a layer, and it is the one branch where being slow to reach matters, so it
+/// sits where the shortest outward drag lands.
+RadialMenuNode _other() {
+  return RadialMenuNode(
     id: 'finish',
-    labelKey: 'radial.finish',
-    iconId: 'finish',
+    labelKey: 'radial.other',
+    iconId: 'other',
     children: <RadialMenuNode>[
+      _caution(),
+      _toneRegister(),
+      ..._finishCommands(),
+    ],
+  );
+}
+
+List<RadialMenuNode> _finishCommands() {
+  return const <RadialMenuNode>[
       RadialMenuNode(
         id: 'finish.show',
         labelKey: 'radial.showLines',
@@ -692,6 +749,5 @@ RadialMenuNode _finish() {
         iconId: 'detailedEditor',
         action: RunCommand(RadialCommand.detailedEditor),
       ),
-    ],
-  );
+  ];
 }

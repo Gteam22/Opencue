@@ -26,6 +26,21 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PACKAGE = "opencue"
 
+
+def read_source(path: pathlib.Path) -> str:
+    """Read Dart, collapsing generated embedded JSON to its declaration.
+
+    Walking hundreds of thousands of string characters through the small
+    hand-written lexer is both pointless and disproportionately slow; generated
+    seed files contain no imports or executable references inside that JSON.
+    """
+    raw = path.read_text(encoding="utf-8")
+    if raw.startswith("// GENERATED FILE."):
+        match = re.search(r"const\s+String\s+(\w+)\s*=", raw)
+        if match:
+            return f"const String {match.group(1)} = '';\n"
+    return raw
+
 IMPORT_RE = re.compile(
     r"^\s*(import|export)\s+'([^']+)'((?:\s+(?:as|show|hide)\s+[^;]*)?)\s*;",
     re.MULTILINE,
@@ -203,7 +218,7 @@ def main() -> int:
 
     decls: dict[pathlib.Path, set[str]] = {}
     for path in sources:
-        raw = path.read_text(encoding="utf-8")
+        raw = read_source(path)
         decls[path] = declarations(strip_noise(IMPORT_RE.sub("", raw)))
 
     # Every name declared anywhere, so a reference can be attributed to a file.
@@ -218,7 +233,7 @@ def main() -> int:
 
     for path in sources:
         rel = str(path.relative_to(ROOT))
-        raw = path.read_text(encoding="utf-8")
+        raw = read_source(path)
         # Imports are read from the raw text: strip_noise blanks string bodies,
         # and an import URI is a string literal.
         directives = IMPORT_RE.findall(raw)

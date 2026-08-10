@@ -110,6 +110,13 @@ enum Tone {
   playful,
   direct,
   flirty,
+  witty,
+  humorous,
+  classy,
+  confident,
+  suggestive,
+  romantic,
+  teasing,
 }
 
 /// Neutral, externally observable facts about the situation.
@@ -194,7 +201,27 @@ enum LineCategory {
   withOneFriend,
   contactExchange,
   gracefulExit,
+
+  // Manually browsed conversation-library families. These entries are never
+  // selected by the recommendation engine; their category is for explicit
+  // user navigation, search and filtering only.
+  playful,
+  flirty,
+  witty,
+  gentleman,
+  questions,
+  kissing,
+  naughty,
+  intimate,
+  games,
+  comebacks,
 }
+
+/// User-selected intensity for the manual conversation library.
+enum ConversationBoldness { light, flirty, naughty, explicit }
+
+/// The interaction shape of a manual conversation-library line.
+enum ConversationUsageType { question, statement, comeback, game }
 
 /// How an interaction went. Describes the interaction, never the person.
 enum InteractionOutcome {
@@ -216,11 +243,54 @@ enum ContextSource {
   ambientAudio,
 }
 
-/// Interface language preference.
+/// Which language the opener cards display.
+///
+/// Kept forward-compatible: [enumFromNameOr] parses an unknown stored value
+/// back to a default, so adding a language later needs no migration. The three
+/// original values keep their meaning; [korean] and [both] are additive.
 enum LanguageMode {
+  /// Japanese lines, English meanings underneath when that option is on.
   japanese,
+
+  /// English-led interface. Cards still lead with the Japanese line.
   english,
+
+  /// Japanese and English together, as before.
   bilingual,
+
+  /// Korean lines, with an optional Roman reading underneath.
+  korean,
+
+  /// Japanese and Korean together for the same entry, so both readings of one
+  /// line are visible at once.
+  both,
+}
+
+/// Whether a mode shows the Japanese line.
+extension LanguageModeText on LanguageMode {
+  bool get showsJapanese =>
+      this == LanguageMode.japanese ||
+      this == LanguageMode.english ||
+      this == LanguageMode.bilingual ||
+      this == LanguageMode.both;
+
+  bool get showsKorean =>
+      this == LanguageMode.korean || this == LanguageMode.both;
+
+  /// The interface-chrome language. Korean chrome is not yet translated, so
+  /// Korean and Both fall back to English chrome while showing Korean lines.
+  LanguageMode get interfaceLanguage {
+    switch (this) {
+      case LanguageMode.japanese:
+        return LanguageMode.japanese;
+      case LanguageMode.english:
+      case LanguageMode.korean:
+      case LanguageMode.both:
+        return LanguageMode.english;
+      case LanguageMode.bilingual:
+        return LanguageMode.bilingual;
+    }
+  }
 }
 
 /// Theme preference. Mapped to Flutter's ThemeMode in the presentation layer.
@@ -228,6 +298,18 @@ enum AppThemePreference {
   light,
   dark,
   system,
+}
+
+/// How fast a line is spoken aloud.
+///
+/// A named preset rather than a raw rate, so the setting reads plainly and a
+/// stored value survives a change to the underlying numbers. The concrete
+/// rate for each lives in [SpeechRatePresetValue] in the presentation layer,
+/// keeping this enum free of playback detail.
+enum SpeechRatePreset {
+  slow,
+  normal,
+  fast,
 }
 
 /// Library sort order.

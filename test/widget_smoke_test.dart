@@ -58,6 +58,21 @@ void main() {
   Future<void> tapLabel(WidgetTester tester, String label) =>
       tapFinder(tester, find.text(label).first);
 
+  /// Walks from the home screen to the detailed context editor.
+  ///
+  /// The home screen's primary action now opens the radial composer rather
+  /// than the form directly. These tests drive the form, because it is the
+  /// surface that exercises every context dimension and it must keep working
+  /// - the radial menu is an addition, not a replacement. The composer's
+  /// "Detailed editor" button is the documented way through, so tapping it
+  /// here is also a regression test that the conventional editor stays
+  /// reachable.
+  Future<void> openDetailedContextEditor(WidgetTester tester) async {
+    await tapLabel(tester, stringsEn['home.findLine']!);
+    await tapLabel(tester, stringsEn['context.openDetailed']!);
+    expect(find.text(stringsEn['context.title']!), findsOneWidget);
+  }
+
   /// Builds a live app over an in-memory database.
   ///
   /// Nothing is stubbed: the widgets talk to the real repositories and the real
@@ -140,13 +155,14 @@ void main() {
       expect(state.lineCount, greaterThanOrEqualTo(60));
     });
 
-    testWidgets('a database holding only the user own line is left alone',
+    testWidgets('an existing user line receives the conversation library once',
         (tester) async {
       final state = await pumpApp(
         tester,
         preload: <OpenerLine>[line('mine', japanese: '自分の一言。')],
       );
-      expect(state.lineCount, 1);
+      expect(state.lines.where((line) => !line.manualOnly), hasLength(1));
+      expect(state.lines.where((line) => line.manualOnly), hasLength(329));
       expect(find.text(stringsEn['home.findLine']!), findsOneWidget);
     });
 
@@ -234,8 +250,7 @@ void main() {
         ],
       );
 
-      await tapLabel(tester, stringsEn['home.findLine']!);
-      expect(find.text(stringsEn['context.title']!), findsOneWidget);
+      await openDetailedContextEditor(tester);
 
       await tapLabel(tester, stringsEn['location.bar']!);
 
@@ -259,7 +274,7 @@ void main() {
         ],
       );
 
-      await tapLabel(tester, stringsEn['home.findLine']!);
+      await openDetailedContextEditor(tester);
       await tapLabel(tester, stringsEn['location.cafe']!);
 
       // Switch on "appears to be working", one of the five hard conditions.
@@ -294,7 +309,7 @@ void main() {
         ],
       );
 
-      await tapLabel(tester, stringsEn['home.findLine']!);
+      await openDetailedContextEditor(tester);
       await tapLabel(tester, stringsEn['location.bar']!);
       await tapLabel(tester, stringsEn['context.showSuggestions']!);
 
@@ -331,7 +346,7 @@ void main() {
       await settle(tester);
       await tapLabel(tester, stringsEn['action.save']!);
 
-      expect(state.lineCount, 2);
+      expect(state.lines.where((line) => !line.manualOnly), hasLength(2));
       expect(find.text('書いてみた一言です。'), findsOneWidget);
     });
 
@@ -342,7 +357,7 @@ void main() {
       await tapFinder(tester, find.text(stringsEn['action.addLine']!).first);
       await tapLabel(tester, stringsEn['action.save']!);
 
-      expect(state.lineCount, 1);
+      expect(state.lines.where((line) => !line.manualOnly), hasLength(1));
       expect(
         find.text(stringsEn['validation.japaneseRequired']!),
         findsWidgets,
@@ -383,7 +398,7 @@ void main() {
       expect(find.text(stringsEn['library.deleteTitle']!), findsOneWidget);
       await tapLabel(tester, stringsEn['action.cancel']!);
 
-      expect(state.lineCount, 1);
+      expect(state.lines.where((line) => !line.manualOnly), hasLength(1));
     });
   });
 

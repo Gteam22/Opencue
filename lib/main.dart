@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'core/app_paths.dart';
 import 'data/db/app_database.dart';
+import 'data/speech/speech_capability.dart';
 import 'data/library_service.dart';
 import 'data/repositories/sqlite_repositories.dart';
 import 'features/shared/app_scope.dart';
@@ -26,6 +27,9 @@ Future<void> main() async {
         settings: SqliteSettingsRepository(database.db),
         presets: SqliteContextPresetRepository(database.db),
       ),
+      // Real TTS on Android, a no-op elsewhere. The factory decides; nothing
+      // above it references the plugin.
+      speechService: createSpeechService(),
     );
 
     runApp(OpenCueApp(state: state));

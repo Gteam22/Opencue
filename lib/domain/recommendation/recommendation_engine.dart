@@ -74,6 +74,10 @@ class RecommendationEngine {
     final exits = <ScoredLine>[];
 
     for (final line in library) {
+      if (line.manualOnly) {
+        excluded.add(ExcludedLine(line, ExclusionReason.manualOnly));
+        continue;
+      }
       if (!line.isValid) {
         excluded.add(ExcludedLine(line, ExclusionReason.invalidLine));
         continue;

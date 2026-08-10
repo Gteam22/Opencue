@@ -5,6 +5,7 @@ import '../../domain/enums/enums.dart';
 import '../../domain/models/opener_line.dart';
 import '../../l10n/app_localizations.dart';
 import 'app_scope.dart';
+import 'korean_speak_button.dart';
 
 /// The OpenCue mark: a speech bubble with a small compass needle inside.
 ///
@@ -384,17 +385,83 @@ class LineText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = AppScope.strings(context);
+    final mode = strings.mode;
     final english = line.englishMeaning;
     final wantsEnglish =
         showEnglish && strings.showEnglishMeaning && english != null;
-    final style = japaneseStyle ?? AppTheme.japaneseBody(context);
+    final japaneseStyleResolved =
+        japaneseStyle ?? AppTheme.japaneseBody(context);
+
+    // A line is one entry in every language. In Both mode its Japanese and
+    // Korean readings appear together, Japanese first, rather than as two
+    // unrelated rows. When Korean is selected but this particular line has no
+    // Korean twin, the Japanese still shows so the list never has a hole.
+    final korean = line.koreanText;
+    final showJapanese = mode.showsJapanese || korean == null;
+    final showKorean = mode.showsKorean && korean != null;
+    final romanization = line.koreanRomanization;
+    final wantsRomanization = showKorean &&
+        strings.showKoreanRomanization &&
+        romanization != null &&
+        romanization.isNotEmpty;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        if (selectable)
-          SelectableText(line.japaneseText, style: style)
-        else
-          Text(line.japaneseText, style: style),
+        if (showJapanese)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              if (line.ttsJapanese)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, right: 6),
+                  child: JapaneseSpeakButton(
+                    lineId: line.id,
+                    japaneseText: line.japaneseText,
+                  ),
+                ),
+              Expanded(
+                child: selectable
+                    ? SelectableText(
+                        line.japaneseText,
+                        style: japaneseStyleResolved,
+                      )
+                    : Text(line.japaneseText, style: japaneseStyleResolved),
+              ),
+            ],
+          ),
+        if (showJapanese && showKorean) const SizedBox(height: 8),
+        if (showKorean) ...<Widget>[
+          // The speaker sits inline before the Korean, as the brief shows:
+          //   🔊 안녕하세요. ...
+          // It hides itself when speech is off or unavailable, so the Korean
+          // still lays out cleanly on platforms and settings without TTS.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              if (line.ttsKorean)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, right: 6),
+                  child: KoreanSpeakButton(
+                    lineId: line.id,
+                    koreanText: korean,
+                  ),
+                ),
+              Expanded(
+                child: selectable
+                    ? SelectableText(
+                        korean,
+                        style: AppTheme.koreanBody(context),
+                      )
+                    : Text(korean, style: AppTheme.koreanBody(context)),
+              ),
+            ],
+          ),
+          if (wantsRomanization) ...<Widget>[
+            const SizedBox(height: 2),
+            Text(romanization, style: AppTheme.koreanRomanization(context)),
+          ],
+        ],
         if (wantsEnglish) ...<Widget>[
           const SizedBox(height: 6),
           Text(english, style: AppTheme.englishMeaning(context)),

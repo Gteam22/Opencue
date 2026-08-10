@@ -1054,7 +1054,24 @@ def main():
           % (len(LINES), len(counts)))
     for cat in sorted(counts):
         print('  %-28s %d' % (cat, counts[cat]))
-    return 0
+
+    # Enrich with Korean and rewrite both files. Skippable with an env flag
+    # for the rare case of building the Japanese-only seed in isolation, and
+    # skipped automatically if the Korean source file is not present so this
+    # never becomes a hard dependency of the base seed build.
+    if os.environ.get('OPENCUE_SKIP_KOREAN') == '1':
+        print('Korean step skipped (OPENCUE_SKIP_KOREAN=1).')
+        return 0
+    try:
+        import build_korean
+    except ImportError:
+        print('Korean builder not found; leaving the seed Japanese-only.')
+        return 0
+    if not os.path.exists(build_korean.KOREAN_FILE):
+        print('Korean source file not found at %s; '
+              'leaving the seed Japanese-only.' % build_korean.KOREAN_FILE)
+        return 0
+    return build_korean.main()
 
 
 def dart_header(count):

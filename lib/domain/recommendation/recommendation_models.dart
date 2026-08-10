@@ -75,6 +75,9 @@ class ScoreFactor {
 
 /// Why a line was removed from consideration entirely.
 enum ExclusionReason {
+  /// Deliberately available only through explicit library browsing.
+  manualOnly,
+
   /// The line lists an avoid condition that the situation makes true.
   conflictingAvoidCondition,
 

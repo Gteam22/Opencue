@@ -38,6 +38,10 @@ SOURCES = [
     'lib/domain/context/radial_geometry.dart',
     'lib/domain/context/context_draft.dart',
     'lib/domain/models/context_snapshot.dart',
+    'lib/domain/context/signals/context_signal.dart',
+    'lib/domain/context/signals/location_signal.dart',
+    'lib/domain/context/signals/nearby_place_signal.dart',
+    'lib/domain/context/signals/audio_environment_signal.dart',
 ]
 
 GENERATORS = ['tool/build_seed.py', 'tool/build_strings.py']

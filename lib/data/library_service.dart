@@ -6,6 +6,7 @@ import '../domain/models/interaction_record.dart';
 import '../domain/models/opener_line.dart';
 import '../domain/repositories/repositories.dart';
 import 'repositories/sqlite_repositories.dart';
+import 'seed/conversation_seed_loader.dart';
 import 'seed/seed_loader.dart';
 import 'seed/starter_presets.dart';
 
@@ -21,9 +22,12 @@ class LibraryService {
     required this.settings,
     required this.presets,
     SeedLoader seedLoader = const SeedLoader(),
+    ConversationSeedLoader conversationSeed =
+        const ConversationSeedLoader(),
     StarterPresets presetSeed = const StarterPresets(),
     IdGenerator? idGenerator,
   })  : _seed = seedLoader,
+        _conversationSeed = conversationSeed,
         _presetSeed = presetSeed,
         _ids = idGenerator ?? IdGenerator();
 
@@ -32,6 +36,7 @@ class LibraryService {
   final SettingsRepository settings;
   final ContextPresetRepository presets;
   final SeedLoader _seed;
+  final ConversationSeedLoader _conversationSeed;
   final StarterPresets _presetSeed;
   final IdGenerator _ids;
 
@@ -45,6 +50,19 @@ class LibraryService {
     final starter = _seed.load();
     await lines.insertMany(starter);
     return starter.length;
+  }
+
+  /// Installs missing records from the generated manual conversation library.
+  /// AppState gates this by a persisted content version, so intentional user
+  /// deletions are not silently undone on every launch.
+  Future<int> installConversationLibrary() async {
+    final starter = _conversationSeed.load();
+    final existingIds = await lines.existingIds();
+    final missing = starter
+        .where((line) => !existingIds.contains(line.id))
+        .toList();
+    if (missing.isNotEmpty) await lines.insertMany(missing);
+    return missing.length;
   }
 
   /// Installs the starter context presets if none exist.
@@ -82,7 +100,10 @@ class LibraryService {
   /// is set; the point of the action is to recover deleted lines, not to
   /// discard someone's work by surprise.
   Future<int> restoreStarterLibrary({bool overwriteEdited = false}) async {
-    final starter = _seed.load();
+    final starter = <OpenerLine>[
+      ..._seed.load(),
+      ..._conversationSeed.load(),
+    ];
     final existingIds = await lines.existingIds();
     final toInsert = <OpenerLine>[];
     final toUpdate = <OpenerLine>[];

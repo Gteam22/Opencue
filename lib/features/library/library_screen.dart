@@ -11,10 +11,15 @@ import 'line_editor_screen.dart';
 
 /// Browse, search, filter and manage the whole library.
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({this.initialFavoritesOnly = false, super.key});
+  const LibraryScreen({
+    this.initialFavoritesOnly = false,
+    this.initialCategories = const <LineCategory>{},
+    super.key,
+  });
 
   /// Opens with the favourites filter already applied, for the home shortcut.
   final bool initialFavoritesOnly;
+  final Set<LineCategory> initialCategories;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -28,7 +33,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void initState() {
     super.initState();
-    _query = LibraryQuery(favoritesOnly: widget.initialFavoritesOnly);
+    _query = LibraryQuery(
+      favoritesOnly: widget.initialFavoritesOnly,
+      categories: widget.initialCategories,
+    );
   }
 
   @override
@@ -301,6 +309,26 @@ class _FilterPanel extends StatelessWidget {
               ),
             ),
             _FilterGroup(
+              label: strings.t('library.boldness'),
+              child: MultiSelectChips<ConversationBoldness>(
+                values: ConversationBoldness.values,
+                selected: query.boldness,
+                labelFor: strings.boldness,
+                onChanged: (value) =>
+                    onChanged(query.copyWith(boldness: value)),
+              ),
+            ),
+            _FilterGroup(
+              label: strings.t('library.usageType'),
+              child: MultiSelectChips<ConversationUsageType>(
+                values: ConversationUsageType.values,
+                selected: query.usageTypes,
+                labelFor: strings.usageType,
+                onChanged: (value) =>
+                    onChanged(query.copyWith(usageTypes: value)),
+              ),
+            ),
+            _FilterGroup(
               label: strings.t('editor.locations'),
               child: MultiSelectChips<LocationTag>(
                 values: LocationTag.values,
@@ -451,6 +479,13 @@ class LibraryRow extends StatelessWidget {
                     runSpacing: 6,
                     children: <Widget>[
                       MetaTag(strings.category(line.category)),
+                      if (line.boldness != null)
+                        MetaTag(
+                          strings.boldness(line.boldness!),
+                          emphasised: true,
+                        ),
+                      if (line.usageType != null)
+                        MetaTag(strings.usageType(line.usageType!)),
                       for (final tone in line.tones.take(2))
                         MetaTag(strings.tone(tone)),
                       MetaTag('${strings.t('editor.directness')} '

@@ -12,6 +12,8 @@ class OpenerLine {
     required this.id,
     required this.japaneseText,
     this.englishMeaning,
+    Map<String, String>? translations,
+    this.koreanRomanization,
     this.category = LineCategory.universal,
     Set<LocationTag>? locations,
     Set<ActivityTag>? activities,
@@ -20,6 +22,12 @@ class OpenerLine {
     Set<NoiseLevel>? noiseLevels,
     Set<Tone>? tones,
     int directness = 2,
+    this.boldness,
+    this.usageType,
+    Set<String>? topics,
+    this.manualOnly = false,
+    this.ttsJapanese = true,
+    this.ttsKorean = true,
     Set<UseCondition>? conditions,
     Set<AvoidCondition>? avoidConditions,
     this.followUpSuggestion,
@@ -33,7 +41,9 @@ class OpenerLine {
     this.positiveResults = 0,
     this.neutralResults = 0,
     this.negativeResults = 0,
-  })  : locations = Set.unmodifiable(locations ?? const <LocationTag>{}),
+  })  : translations =
+            Map.unmodifiable(translations ?? const <String, String>{}),
+        locations = Set.unmodifiable(locations ?? const <LocationTag>{}),
         activities = Set.unmodifiable(activities ?? const <ActivityTag>{}),
         observableCues =
             Set.unmodifiable(observableCues ?? const <ObservableCue>{}),
@@ -41,6 +51,7 @@ class OpenerLine {
         noiseLevels = Set.unmodifiable(noiseLevels ?? const <NoiseLevel>{}),
         tones = Set.unmodifiable(tones ?? const <Tone>{Tone.friendly}),
         directness = clampDirectness(directness),
+        topics = Set.unmodifiable(topics ?? const <String>{}),
         conditions = Set.unmodifiable(conditions ?? const <UseCondition>{}),
         avoidConditions =
             Set.unmodifiable(avoidConditions ?? const <AvoidCondition>{}),
@@ -54,6 +65,29 @@ class OpenerLine {
 
   /// A natural English rendering. Optional but strongly encouraged.
   final String? englishMeaning;
+
+  /// Translations of [japaneseText] into other display languages, keyed by
+  /// lowercase ISO-639 code — 'ko' for Korean today, and the door is open for
+  /// 'zh', 'es' and so on without another schema change.
+  ///
+  /// The Japanese text is *not* duplicated in here: it stays on
+  /// [japaneseText] so every line that worked before this field existed still
+  /// works. A line is the same entry in every language; the map is how its
+  /// Korean twin travels with it rather than being a separate, unrelated line.
+  final Map<String, String> translations;
+
+  /// An easy-to-read Roman reading of the Korean text, shown under it when the
+  /// romanization setting is on. Null when there is no Korean or no reading
+  /// was generated.
+  final String? koreanRomanization;
+
+  /// The Korean text, or null when this line has none.
+  String? get koreanText => translations['ko'];
+
+  /// The spoken text for a display language, falling back to Japanese when a
+  /// translation is missing so a partly-translated library never shows blanks.
+  String textFor(String languageCode) =>
+      translations[languageCode] ?? japaneseText;
 
   final LineCategory category;
 
@@ -78,6 +112,23 @@ class OpenerLine {
 
   /// 1 (most indirect) to 5 (most direct).
   final int directness;
+
+  /// Manual intensity metadata. Null for the original situational openers.
+  final ConversationBoldness? boldness;
+
+  /// Question/statement/comeback/game shape for manual browsing.
+  final ConversationUsageType? usageType;
+
+  /// Free, normalized search facets such as `kissing` and `compatibility`.
+  final Set<String> topics;
+
+  /// True for content which must only be browsed or explicitly selected.
+  /// The recommendation engine excludes these records unconditionally.
+  final bool manualOnly;
+
+  /// Whether each native text is eligible for its own TTS control.
+  final bool ttsJapanese;
+  final bool ttsKorean;
 
   /// Preconditions that must hold. Unmet conditions exclude the line.
   final Set<UseCondition> conditions;
@@ -144,6 +195,16 @@ class OpenerLine {
       errors.add('validation.directnessRange');
     }
     if (tones.isEmpty) errors.add('validation.toneRequired');
+    if (manualOnly) {
+      if ((englishMeaning ?? '').trim().isEmpty) {
+        errors.add('validation.englishRequired');
+      }
+      if ((koreanText ?? '').trim().isEmpty) {
+        errors.add('validation.koreanRequired');
+      }
+      if (boldness == null) errors.add('validation.boldnessRequired');
+      if (usageType == null) errors.add('validation.usageTypeRequired');
+    }
     return errors;
   }
 
@@ -154,6 +215,9 @@ class OpenerLine {
     String? japaneseText,
     String? englishMeaning,
     bool clearEnglishMeaning = false,
+    Map<String, String>? translations,
+    String? koreanRomanization,
+    bool clearKoreanRomanization = false,
     LineCategory? category,
     Set<LocationTag>? locations,
     Set<ActivityTag>? activities,
@@ -162,6 +226,14 @@ class OpenerLine {
     Set<NoiseLevel>? noiseLevels,
     Set<Tone>? tones,
     int? directness,
+    ConversationBoldness? boldness,
+    bool clearBoldness = false,
+    ConversationUsageType? usageType,
+    bool clearUsageType = false,
+    Set<String>? topics,
+    bool? manualOnly,
+    bool? ttsJapanese,
+    bool? ttsKorean,
     Set<UseCondition>? conditions,
     Set<AvoidCondition>? avoidConditions,
     String? followUpSuggestion,
@@ -183,6 +255,10 @@ class OpenerLine {
       japaneseText: japaneseText ?? this.japaneseText,
       englishMeaning:
           clearEnglishMeaning ? null : (englishMeaning ?? this.englishMeaning),
+      translations: translations ?? this.translations,
+      koreanRomanization: clearKoreanRomanization
+          ? null
+          : (koreanRomanization ?? this.koreanRomanization),
       category: category ?? this.category,
       locations: locations ?? this.locations,
       activities: activities ?? this.activities,
@@ -191,6 +267,12 @@ class OpenerLine {
       noiseLevels: noiseLevels ?? this.noiseLevels,
       tones: tones ?? this.tones,
       directness: directness ?? this.directness,
+      boldness: clearBoldness ? null : (boldness ?? this.boldness),
+      usageType: clearUsageType ? null : (usageType ?? this.usageType),
+      topics: topics ?? this.topics,
+      manualOnly: manualOnly ?? this.manualOnly,
+      ttsJapanese: ttsJapanese ?? this.ttsJapanese,
+      ttsKorean: ttsKorean ?? this.ttsKorean,
       conditions: conditions ?? this.conditions,
       avoidConditions: avoidConditions ?? this.avoidConditions,
       followUpSuggestion: clearFollowUpSuggestion
@@ -235,6 +317,9 @@ class OpenerLine {
       'id': id,
       'japaneseText': japaneseText,
       'englishMeaning': englishMeaning,
+      // Omitted entirely when empty, so existing exports are byte-identical.
+      if (translations.isNotEmpty) 'translations': translations,
+      if (koreanRomanization != null) 'koreanRomanization': koreanRomanization,
       'category': category.name,
       'locations': enumSetToJson(locations),
       'activities': enumSetToJson(activities),
@@ -243,6 +328,11 @@ class OpenerLine {
       'noiseLevels': enumSetToJson(noiseLevels),
       'tones': enumSetToJson(tones),
       'directness': directness,
+      if (boldness != null) 'boldness': boldness!.name,
+      if (usageType != null) 'usageType': usageType!.name,
+      if (topics.isNotEmpty) 'topics': topics.toList()..sort(),
+      if (manualOnly) 'manualOnly': true,
+      'tts': <String, bool>{'jp': ttsJapanese, 'ko': ttsKorean},
       'conditions': enumSetToJson(conditions),
       'avoidConditions': enumSetToJson(avoidConditions),
       'followUpSuggestion': followUpSuggestion,
@@ -279,6 +369,8 @@ class OpenerLine {
       id: id,
       japaneseText: japanese,
       englishMeaning: _optionalString(json['englishMeaning']),
+      translations: _stringMap(json['translations']),
+      koreanRomanization: _optionalString(json['koreanRomanization']),
       category: enumFromNameOr(
         LineCategory.values,
         json['category'],
@@ -292,6 +384,13 @@ class OpenerLine {
       noiseLevels: enumSetFromJson(NoiseLevel.values, json['noiseLevels']),
       tones: tones.isEmpty ? <Tone>{Tone.friendly} : tones,
       directness: _int(json['directness'], 2),
+      boldness: enumFromName(ConversationBoldness.values, json['boldness']),
+      usageType:
+          enumFromName(ConversationUsageType.values, json['usageType']),
+      topics: _stringSet(json['topics']),
+      manualOnly: _bool(json['manualOnly']),
+      ttsJapanese: _ttsFlag(json['tts'], 'jp'),
+      ttsKorean: _ttsFlag(json['tts'], 'ko'),
       conditions: enumSetFromJson(UseCondition.values, json['conditions']),
       avoidConditions:
           enumSetFromJson(AvoidCondition.values, json['avoidConditions']),
@@ -323,6 +422,10 @@ class OpenerLine {
       'id': id,
       'japanese_text': japaneseText,
       'english_meaning': englishMeaning,
+      // One JSON column rather than a column per language, so a new language
+      // is a data change and never a schema change.
+      'translations': translations.isEmpty ? null : jsonEncode(translations),
+      'korean_romanization': koreanRomanization,
       'category': category.name,
       'locations': enumSetToCsv(locations),
       'activities': enumSetToCsv(activities),
@@ -331,6 +434,12 @@ class OpenerLine {
       'noise_levels': enumSetToCsv(noiseLevels),
       'tones': enumSetToCsv(tones),
       'directness': directness,
+      'boldness': boldness?.name,
+      'usage_type': usageType?.name,
+      'topics': (topics.toList()..sort()).join(','),
+      'manual_only': manualOnly ? 1 : 0,
+      'tts_japanese': ttsJapanese ? 1 : 0,
+      'tts_korean': ttsKorean ? 1 : 0,
       'conditions': enumSetToCsv(conditions),
       'avoid_conditions': enumSetToCsv(avoidConditions),
       'follow_up_suggestion': followUpSuggestion,
@@ -353,6 +462,8 @@ class OpenerLine {
       id: row['id']! as String,
       japaneseText: row['japanese_text']! as String,
       englishMeaning: _optionalString(row['english_meaning']),
+      translations: _decodeTranslations(row['translations']),
+      koreanRomanization: _optionalString(row['korean_romanization']),
       category: enumFromNameOr(
         LineCategory.values,
         row['category'],
@@ -366,6 +477,13 @@ class OpenerLine {
       noiseLevels: enumSetFromCsv(NoiseLevel.values, row['noise_levels']),
       tones: tones.isEmpty ? <Tone>{Tone.friendly} : tones,
       directness: _int(row['directness'], 2),
+      boldness: enumFromName(ConversationBoldness.values, row['boldness']),
+      usageType:
+          enumFromName(ConversationUsageType.values, row['usage_type']),
+      topics: _stringSetFromDb(row['topics']),
+      manualOnly: _bool(row['manual_only']),
+      ttsJapanese: row['tts_japanese'] == null || _bool(row['tts_japanese']),
+      ttsKorean: row['tts_korean'] == null || _bool(row['tts_korean']),
       conditions: enumSetFromCsv(UseCondition.values, row['conditions']),
       avoidConditions:
           enumSetFromCsv(AvoidCondition.values, row['avoid_conditions']),
@@ -381,6 +499,27 @@ class OpenerLine {
       neutralResults: _int(row['neutral_results'], 0),
       negativeResults: _int(row['negative_results'], 0),
     );
+  }
+
+  /// Reads a translations map from decoded JSON, keeping only string values so
+  /// a malformed entry costs one language rather than the whole line.
+  static Map<String, String> _stringMap(Object? value) {
+    if (value is! Map) return const <String, String>{};
+    final out = <String, String>{};
+    value.forEach((key, v) {
+      if (key is String && v is String) out[key] = v;
+    });
+    return out;
+  }
+
+  /// Reads the translations JSON column, tolerating null and corruption.
+  static Map<String, String> _decodeTranslations(Object? value) {
+    if (value is! String || value.isEmpty) return const <String, String>{};
+    try {
+      return _stringMap(jsonDecode(value));
+    } on FormatException {
+      return const <String, String>{};
+    }
   }
 
   String encode() => jsonEncode(toJson());
@@ -414,6 +553,30 @@ bool _bool(Object? value) {
   if (value is int) return value != 0;
   if (value is String) return value == 'true' || value == '1';
   return false;
+}
+
+Set<String> _stringSet(Object? value) {
+  if (value is! List) return const <String>{};
+  return value
+      .whereType<String>()
+      .map((item) => item.trim().toLowerCase())
+      .where((item) => item.isNotEmpty)
+      .toSet();
+}
+
+Set<String> _stringSetFromDb(Object? value) {
+  if (value is! String || value.trim().isEmpty) return const <String>{};
+  return value
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .where((item) => item.isNotEmpty)
+      .toSet();
+}
+
+bool _ttsFlag(Object? value, String language) {
+  if (value is! Map) return true;
+  final flag = value[language];
+  return flag == null || _bool(flag);
 }
 
 /// Parses a timestamp, returning null when absent or unparseable so that the

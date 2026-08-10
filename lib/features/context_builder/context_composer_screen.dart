@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../domain/context/context_draft.dart';
 import '../../domain/context/radial_menu_tree.dart';
+import '../../domain/enums/enums.dart';
 import '../../domain/models/context_preset.dart';
 import '../../l10n/app_localizations.dart';
 import '../shared/app_scope.dart';
+import '../library/library_screen.dart';
 import 'context_builder_screen.dart';
 import 'context_chips.dart';
 import 'radial_context_menu.dart';
@@ -116,7 +118,45 @@ class _ContextComposerScreenState extends State<ContextComposerScreen> {
       case RadialCommand.undo:
         // Handled inside the controller.
         break;
+      case RadialCommand.browseConversationPlayful:
+      case RadialCommand.browseConversationFlirty:
+      case RadialCommand.browseConversationWitty:
+      case RadialCommand.browseConversationGentleman:
+      case RadialCommand.browseConversationQuestions:
+      case RadialCommand.browseConversationKissing:
+      case RadialCommand.browseConversationNaughty:
+      case RadialCommand.browseConversationIntimate:
+      case RadialCommand.browseConversationGames:
+      case RadialCommand.browseConversationComebacks:
+        await _openConversationLibrary(_categoryForCommand(command));
     }
+  }
+
+  LineCategory _categoryForCommand(RadialCommand command) => switch (command) {
+        RadialCommand.browseConversationPlayful => LineCategory.playful,
+        RadialCommand.browseConversationFlirty => LineCategory.flirty,
+        RadialCommand.browseConversationWitty => LineCategory.witty,
+        RadialCommand.browseConversationGentleman => LineCategory.gentleman,
+        RadialCommand.browseConversationQuestions => LineCategory.questions,
+        RadialCommand.browseConversationKissing => LineCategory.kissing,
+        RadialCommand.browseConversationNaughty => LineCategory.naughty,
+        RadialCommand.browseConversationIntimate => LineCategory.intimate,
+        RadialCommand.browseConversationGames => LineCategory.games,
+        RadialCommand.browseConversationComebacks => LineCategory.comebacks,
+        _ => throw ArgumentError.value(command, 'command'),
+      };
+
+  Future<void> _openConversationLibrary(LineCategory category) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(
+            title: Text(AppScope.strings(context).category(category)),
+          ),
+          body: LibraryScreen(initialCategories: <LineCategory>{category}),
+        ),
+      ),
+    );
   }
 
   Future<void> _openFallback({String? branchId}) async {
@@ -139,7 +179,11 @@ class _ContextComposerScreenState extends State<ContextComposerScreen> {
         ),
       ),
     );
-    if (result != null) _controller.setDraft(result);
+    if (result == null || !mounted) return;
+    // The detailed editor's own action is "Show suggestions", so a draft
+    // coming back from it means the user has finished, not that they want to
+    // land back here. Applying it directly carries them straight through.
+    _apply(result);
   }
 
   Future<void> _savePreset() async {

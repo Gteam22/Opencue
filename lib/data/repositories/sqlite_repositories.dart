@@ -47,16 +47,8 @@ class SqliteOpenerLineRepository implements OpenerLineRepository {
     final where = <String>[];
     final args = <Object?>[];
 
-    final search = query.searchText.trim();
-    if (search.isNotEmpty) {
-      where.add(
-        '(japanese_text LIKE ? OR '
-        'LOWER(COALESCE(english_meaning, \'\')) LIKE ?)',
-      );
-      args
-        ..add('%$search%')
-        ..add('%${search.toLowerCase()}%');
-    }
+    // Multilingual/tokenized search is applied through LibraryQuery.matches
+    // below. SQLite still narrows cheap scalar filters first.
     if (query.favoritesOnly) {
       where.add('is_favorite = 1');
     }
@@ -112,6 +104,11 @@ class SqliteOpenerLineRepository implements OpenerLineRepository {
       lines =
           lines.where((l) => query.categories.contains(l.category)).toList();
     }
+
+    // Covers multilingual search plus the conversation-library boldness and
+    // usage filters. It intentionally re-checks the scalar filters too so the
+    // in-memory and repository query paths share one definition of a match.
+    lines = lines.where(query.matches).toList();
 
     _applySort(lines, query.sort);
     return lines;

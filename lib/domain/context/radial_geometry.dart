@@ -86,7 +86,7 @@ class RadialGeometry {
     required this.sectorCount,
     this.deadZoneRadius = 44,
     this.innerRadius = 68,
-    this.outerRadius = 132,
+    this.outerRadius = 124,
     this.childOuterRadius = 196,
     this.startAngle = 0,
     this.sweep = 2 * math.pi,
@@ -121,6 +121,38 @@ class RadialGeometry {
   /// Whether this layout covers the whole circle.
   bool get isFullCircle => (sweep - 2 * math.pi).abs() < 1e-9;
 
+  // --- Layered bands -------------------------------------------------------
+  //
+  // Descending a layer does not replace the ring, it steps outward: the active
+  // band grows and the layer above it stays visible as a thin trace arc. That
+  // is what makes the depth legible during a single continuous drag, and it is
+  // why the finger can keep moving outward rather than having to re-aim.
+  //
+  // The step is small on purpose. Three layers have to fit inside the radius a
+  // phone can actually show. On a 380 pt screen with the menu at the bottom
+  // centre, a half-fan opening upwards has about 190 pt to work with, so the
+  // bands are 68-124, 94-150 and 120-176, and the outermost edge including its
+  // shadow lands at 188. A 56 pt band is thick enough for a two-line label,
+  // which is the constraint that stops the step being larger.
+
+  /// How much further out each layer sits.
+  static const double layerStep = 26;
+
+  /// Inner radius of the band for a layer at [depth], where the root is 0.
+  double innerRadiusAt(int depth) => innerRadius + depth * layerStep;
+
+  /// Outer radius of the band for a layer at [depth].
+  double outerRadiusAt(int depth) => outerRadius + depth * layerStep;
+
+  /// Radius of the thin trace arc left behind by an ancestor at [depth].
+  ///
+  /// Sits just inside that layer's own former band, so the trail reads
+  /// outward from the centre in the order it was walked.
+  double traceRadiusAt(int depth) => innerRadiusAt(depth) - 8;
+
+  /// The outermost radius anything is drawn at, for the placement solver.
+  double totalRadiusAt(int depth) => outerRadiusAt(depth) + 12;
+
   /// Angular width of one sector.
   double get sectorSweep => sweep / sectorCount;
 
@@ -149,11 +181,17 @@ class RadialGeometry {
 
   /// Hit-tests a pointer at `(dx, dy)` relative to the menu centre.
   ///
-  /// [childLayerOpen] tells the geometry whether the outer band is a live
-  /// child ring or merely empty space beyond the root ring.
-  RadialHit hitTest(double dx, double dy, {bool childLayerOpen = false}) {
+  /// [depth] is the layer currently showing, so the band the pointer is tested
+  /// against moves outward as the user descends.
+  RadialHit hitTest(
+    double dx,
+    double dy, {
+    bool childLayerOpen = false,
+    int depth = 0,
+  }) {
     final distance = math.sqrt(dx * dx + dy * dy);
     final angle = angleOf(dx, dy);
+    final bandOuter = outerRadiusAt(depth);
 
     if (distance <= deadZoneRadius) {
       return RadialHit(
@@ -178,9 +216,14 @@ class RadialGeometry {
     }
 
     final RadialZone zone;
-    if (distance <= outerRadius) {
+    if (distance <= bandOuter) {
+      // Anywhere outside the dead zone and inside the active band's outer
+      // edge counts as pointing at that sector, including the gap between the
+      // dead zone and `bandInner`. Requiring the finger to land inside a thin
+      // annulus would be exactly the precision the brief says not to demand.
       zone = RadialZone.ring;
-    } else if (childLayerOpen && distance <= childOuterRadius) {
+    } else if (childLayerOpen &&
+        distance <= outerRadiusAt(depth + 1)) {
       zone = RadialZone.childRing;
     } else {
       zone = RadialZone.beyond;
@@ -197,17 +240,20 @@ class RadialGeometry {
   /// Whether a pointer at [distance] has crossed the threshold that opens the
   /// next layer. Sits just inside [outerRadius] so the layer opens as the
   /// finger reaches the edge of the sector rather than after leaving it.
-  bool crossesExpandThreshold(double distance) =>
-      distance >= outerRadius - _expandSlack;
+  bool crossesExpandThreshold(double distance, {int depth = 0}) =>
+      distance >= outerRadiusAt(depth) - _expandSlack;
 
   /// Whether a pointer at [distance] has been drawn back far enough to close
   /// the child layer. Deliberately well inside [crossesExpandThreshold] so a
   /// small tremor at the boundary does not flap the layer open and shut.
-  bool crossesCollapseThreshold(double distance) =>
-      distance <= innerRadius + _collapseSlack;
+  bool crossesCollapseThreshold(double distance, {int depth = 0}) =>
+      distance <= innerRadiusAt(depth) + _collapseSlack;
 
   static const double _expandSlack = 10;
   static const double _collapseSlack = 6;
+
+  /// How far a fanned menu's centre sits from the safe edge it hugs.
+  static const double edgeMargin = 24;
 
   RadialGeometry copyWith({
     int? sectorCount,
@@ -290,10 +336,18 @@ class RadialPlacement {
 
     // Horizontal.
     var fanHorizontally = false;
+    var fanOpensRight = true;
     if (minX > maxX) {
-      // Not wide enough for a full ring at this radius.
+      // Not wide enough for a full ring at this radius. A sideways fan needs
+      // the radius on one side only, so the centre goes to the edge nearer
+      // the finger and the fan opens into the space that is actually there.
+      // Centring it would leave the fan clipped on whichever side it opened.
       fanHorizontally = true;
-      centreX = (safeLeft + width - safeRight) / 2;
+      final middle = (safeLeft + width - safeRight) / 2;
+      fanOpensRight = requestedX <= middle;
+      centreX = fanOpensRight
+          ? safeLeft + RadialGeometry.edgeMargin
+          : width - safeRight - RadialGeometry.edgeMargin;
       clamped = true;
     } else if (centreX < minX) {
       centreX = minX;
@@ -306,8 +360,11 @@ class RadialPlacement {
     // Vertical.
     var fanVertically = false;
     if (minY > maxY) {
+      // Same reasoning as above, and on a phone this is the common case: the
+      // trigger sits near the bottom, so the fan opens upwards from there
+      // rather than from the middle of the screen.
       fanVertically = true;
-      centreY = (safeTop + height - safeBottom) / 2;
+      centreY = height - safeBottom - RadialGeometry.edgeMargin;
       clamped = true;
     } else if (centreY < minY) {
       centreY = minY;
@@ -327,16 +384,20 @@ class RadialPlacement {
       );
     }
 
-    // A half-fan opening away from the constrained edge. Vertical crowding is
-    // the common case on a phone, where the button sits near the bottom.
+    // A half-fan opening away from the constrained edge. Vertical crowding
+    // takes precedence: on a phone the trigger sits near the bottom, so an
+    // upward fan is the one that matches the thumb.
+    //
+    // The direction comes from `fanOpensRight`, which was decided from the
+    // *requested* position. Reading it back off `centreX` here would be
+    // wrong, because `centreX` has since been moved to an edge.
     final double centre;
     if (fanVertically) {
       // Fan upwards: centred on twelve o'clock.
       centre = 0;
     } else {
-      final towardsLeftEdge = centreX < width / 2;
-      // Fan towards the open side: three o'clock or nine o'clock.
-      centre = towardsLeftEdge ? math.pi / 2 : 3 * math.pi / 2;
+      // Three o'clock opens rightwards, nine o'clock leftwards.
+      centre = fanOpensRight ? math.pi / 2 : 3 * math.pi / 2;
     }
     const fanSweep = math.pi;
     return RadialPlacement(

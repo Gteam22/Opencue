@@ -22,6 +22,7 @@ LIMIT = 80
 # string, so it leaves these lines alone and they are not a formatting failure;
 # the column check would only produce noise. Their structure is still checked.
 GENERATED = {
+    "lib/data/seed/conversation_library.dart",
     "lib/data/seed/starter_library.dart",
     "lib/l10n/strings_en.dart",
     "lib/l10n/strings_ja.dart",
@@ -213,7 +214,7 @@ def main() -> int:
                 problems.append(f"line {number}: trailing whitespace")
             # Japanese text is counted as one column per character here, which
             # matches how dart format measures it.
-            if len(raw_line) > LIMIT and str(rel) not in GENERATED:
+            if len(raw_line) > LIMIT and rel.as_posix() not in GENERATED:
                 problems.append(
                     f"line {number}: {len(raw_line)} columns (limit {LIMIT})"
                 )

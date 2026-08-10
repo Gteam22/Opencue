@@ -30,8 +30,27 @@ void main() {
       }
     });
 
-    test('the root has exactly eight sectors, as the brief caps it', () {
-      expect(tree.children, hasLength(8));
+    test('the root has eight sectors, including manual conversations', () {
+      expect(
+        tree.children.map((n) => n.labelKey),
+        <String>[
+          'radial.location',
+          'radial.people',
+          'radial.loudness',
+          'radial.surroundings',
+          'radial.action',
+          'radial.other',
+          'radial.directness',
+          'radial.conversationLibrary',
+        ],
+      );
+      // Still inside the eight-sector ceiling.
+      expect(tree.children.length, lessThanOrEqualTo(8));
+    });
+
+    test('caution is the first child of Other, so it stays one drag away', () {
+      final other = tree.pathTo('finish')!.last;
+      expect(other.children.first.id, 'caution');
     });
 
     test('the tree reaches three hierarchical layers', () {

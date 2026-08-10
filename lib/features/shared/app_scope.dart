@@ -11,6 +11,8 @@ import '../../domain/models/context_snapshot.dart';
 import '../../domain/models/interaction_record.dart';
 import '../../domain/models/opener_line.dart';
 import '../../domain/recommendation/recommendation_engine.dart';
+import '../../domain/speech/speech_controller.dart';
+import '../../domain/speech/speech_service.dart';
 import '../../l10n/app_localizations.dart';
 
 /// Holds everything the screens read and every action they can take.
@@ -24,12 +26,21 @@ class AppState extends ChangeNotifier {
     this.engine = const RecommendationEngine(),
     this.statistics = const StatisticsService(),
     TransferService? transfer,
-  }) : transfer = transfer ?? TransferService();
+    SpeechService? speechService,
+  })  : transfer = transfer ?? TransferService(),
+        speech = SpeechController(
+          speechService ?? const NullSpeechService(),
+        );
 
   final LibraryService service;
   final RecommendationEngine engine;
   final StatisticsService statistics;
   final TransferService transfer;
+
+  /// Shared speech controller. Owns which line is speaking, so no cue widget
+  /// carries playback logic. Bound to a real engine on Android and to a no-op
+  /// elsewhere, so `speech.isSupported` is the single gate for speech controls.
+  final SpeechController speech;
 
   AppSettings _settings = AppSettings.defaults;
   List<OpenerLine> _lines = const <OpenerLine>[];
@@ -43,6 +54,7 @@ class AppState extends ChangeNotifier {
   final List<String> _recentlyShown = <String>[];
 
   static const int _recentlyShownMemory = 12;
+  static const int _conversationLibraryVersion = 1;
 
   AppSettings get settings => _settings;
 
@@ -67,7 +79,10 @@ class AppState extends ChangeNotifier {
 
   Set<String> get recentlyShownIds => _recentlyShown.toSet();
 
-  AppLocalizations get strings => AppLocalizations(_settings.languageMode);
+  AppLocalizations get strings => AppLocalizations(
+        _settings.languageMode,
+        romanizeKorean: _settings.showKoreanRomanization,
+      );
 
   List<OpenerLine> get favorites =>
       _lines.where((l) => l.isFavorite).toList();
@@ -90,6 +105,14 @@ class AppState extends ChangeNotifier {
       // next launch rather than only on a fresh install.
       await service.seedPresetsIfEmpty();
       _settings = await service.settings.load();
+      if (_settings.conversationLibraryVersion <
+          _conversationLibraryVersion) {
+        await service.installConversationLibrary();
+        _settings = _settings.copyWith(
+          conversationLibraryVersion: _conversationLibraryVersion,
+        );
+        await service.settings.save(_settings);
+      }
       await _refreshFromStorage();
     } on Object catch (error) {
       _loadError = '$error';
@@ -316,8 +339,13 @@ class AppState extends ChangeNotifier {
     for (final preset in _presets) {
       await service.presets.delete(preset.id);
     }
-    await updateSettings(AppSettings.defaults);
+    await updateSettings(
+      AppSettings.defaults.copyWith(
+        conversationLibraryVersion: _conversationLibraryVersion,
+      ),
+    );
     await service.seedIfEmpty();
+    await service.installConversationLibrary();
     await service.seedPresetsIfEmpty();
     _draft = ContextDraft.empty();
     _appliedDraft = null;
@@ -407,4 +435,8 @@ class AppScope extends InheritedNotifier<AppState> {
 
   /// Shorthand for the current language's strings.
   static AppLocalizations strings(BuildContext context) => of(context).strings;
+
+  /// The shared speech controller, without subscribing to state rebuilds.
+  /// Widgets that need to react to playback listen to it directly.
+  static SpeechController speech(BuildContext context) => read(context).speech;
 }

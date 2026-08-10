@@ -146,6 +146,57 @@ jobs:
             Write-Host "::warning::$icon not found; keeping the default icon."
           }
 
+      - name: Silence the experimental-coroutine deprecation in plugins
+        shell: pwsh
+        # Not our code. permission_handler_windows 0.2.2 includes
+        # <experimental/coroutine>, which MSVC 14.51 (Visual Studio 2026, what
+        # the runner now ships) turns into a hard error C2338 rather than a
+        # warning. The plugin has not been updated for it, and the message
+        # names the escape hatch itself:
+        #
+        #   You can define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+        #   to suppress this error for now.
+        #
+        # The define is added to the top-level generated CMakeLists, before any
+        # plugin subdirectory is added, so it reaches every plugin target. It
+        # touches only the generated windows/ directory, which is not
+        # committed, so nothing in the repository carries the workaround.
+        #
+        # Remove this step once permission_handler_windows moves to the C++20
+        # <coroutine> header.
+        run: |
+          $cmake = 'windows\CMakeLists.txt'
+          if (-not (Test-Path $cmake)) {
+            Write-Error "$cmake not found; flutter create did not run."
+            exit 1
+          }
+          $lines = Get-Content $cmake
+          if ($lines -match '_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS') {
+            Write-Host "The define is already present; leaving it alone."
+          } else {
+            # Insert immediately after the project() call, which is the first
+            # point at which add_compile_definitions is valid and still early
+            # enough to apply to every target added later.
+            $index = ($lines | Select-String -Pattern '^\s*project\s*\(' `
+              | Select-Object -First 1).LineNumber
+            if (-not $index) {
+              Write-Error "No project() call found in $cmake."
+              exit 1
+            }
+            $insert = @(
+              '',
+              '# Added by CI. permission_handler_windows uses the deprecated',
+              '# <experimental/coroutine> header, which MSVC 14.51 rejects.',
+              'add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)'
+            )
+            $updated = @()
+            $updated += $lines[0..($index - 1)]
+            $updated += $insert
+            $updated += $lines[$index..($lines.Length - 1)]
+            Set-Content -Path $cmake -Value $updated
+            Write-Host "Added the define after project() at line $index."
+          }
+
       - name: Build the Windows release bundle
         # The real gate. If this fails, the code does not compile and there is
         # nothing to package.

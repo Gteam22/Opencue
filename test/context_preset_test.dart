@@ -5,11 +5,13 @@
 // database with no `context_presets` table; they must arrive at exactly the
 // schema a fresh install produces, with their lines and history intact.
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite_common/sqlite_api.dart';
 import 'package:opencue/core/app_info.dart';
 import 'package:opencue/data/db/app_database.dart';
-import 'package:opencue/data/db/database_platform.dart';
 import 'package:opencue/data/repositories/sqlite_repositories.dart';
 import 'package:opencue/data/seed/starter_presets.dart';
 import 'package:opencue/domain/context/context_draft.dart';
@@ -139,21 +141,37 @@ void main() {
   });
 
   group('v2 to v3 migration', () {
-    test('the current version is 3', () {
-      expect(AppInfo.databaseVersion, 3);
+    test('the current version is at least 3', () {
+      // v3 added context_presets; later versions add more. This test guards
+      // the presets migration, so it only needs the floor, not an exact
+      // number that every future migration would have to come and edit.
+      expect(AppInfo.databaseVersion, greaterThanOrEqualTo(3));
     });
 
-    test('a fresh install and an upgraded v1 file have the same schema',
-        () async {
-      final fresh = await AppDatabase.openInMemory();
-      final freshTables = await _tableNames(fresh);
-      expect(freshTables, contains('context_presets'));
+    test('a v1 file gains the presets table when it is upgraded', () async {
+      // A real file on disk, not the in-memory path. An in-memory database
+      // cannot be closed and reopened - and worse, reopening the shared
+      // in-memory path hands back the database that is already open, so the
+      // v1 file appeared to already have the v3 schema. Reopening is the
+      // whole point of a migration test, so it needs a real directory, the
+      // same arrangement test/database_test.dart uses.
+      final temp = await Directory.systemTemp.createTemp('opencue-presets');
+      addTearDown(() => temp.delete(recursive: true));
+      final path = p.join(temp.path, 'opencue.db');
 
-      final legacy =
-          await AppDatabase.openLegacyV1ForTest(DatabasePlatform.inMemoryPath);
-      // A v1 file has no presets table at all.
+      final legacy = await AppDatabase.openLegacyV1ForTest(path);
       expect(await _tableNamesOf(legacy), isNot(contains('context_presets')));
       await legacy.close();
+
+      final upgraded = await AppDatabase.open(path);
+      expect(await _tableNames(upgraded), contains('context_presets'));
+      expect(await upgraded.db.getVersion(), AppInfo.databaseVersion);
+      await upgraded.close();
+    });
+
+    test('a fresh install has the presets table', () async {
+      final fresh = await AppDatabase.openInMemory();
+      expect(await _tableNames(fresh), contains('context_presets'));
       await fresh.close();
     });
 

@@ -244,6 +244,7 @@ def local_function_order_risks(code: str) -> list[str]:
     return findings
 
 
+
 def main() -> int:
     sources = sorted(ROOT.glob("lib/**/*.dart")) + sorted(
         ROOT.glob("test/**/*.dart")

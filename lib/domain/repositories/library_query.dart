@@ -15,6 +15,8 @@ class LibraryQuery {
     this.cues = const <ObservableCue>{},
     this.tones = const <Tone>{},
     this.categories = const <LineCategory>{},
+    this.boldness = const <ConversationBoldness>{},
+    this.usageTypes = const <ConversationUsageType>{},
     this.minDirectness = kMinDirectness,
     this.maxDirectness = kMaxDirectness,
     this.favoritesOnly = false,
@@ -22,7 +24,8 @@ class LibraryQuery {
     this.sort = LibrarySort.recentlyAdded,
   });
 
-  /// Matched case-insensitively against both the Japanese and English text.
+  /// Token-matched across native text, translations, pronunciation and
+  /// browsing metadata. Punctuation is ignored, so `S M` finds `S? M?`.
   final String searchText;
 
   final Set<LocationTag> locations;
@@ -36,6 +39,8 @@ class LibraryQuery {
   final Set<ObservableCue> cues;
   final Set<Tone> tones;
   final Set<LineCategory> categories;
+  final Set<ConversationBoldness> boldness;
+  final Set<ConversationUsageType> usageTypes;
   final int minDirectness;
   final int maxDirectness;
   final bool favoritesOnly;
@@ -51,6 +56,8 @@ class LibraryQuery {
       cues.isEmpty &&
       tones.isEmpty &&
       categories.isEmpty &&
+      boldness.isEmpty &&
+      usageTypes.isEmpty &&
       minDirectness == kMinDirectness &&
       maxDirectness == kMaxDirectness &&
       !favoritesOnly &&
@@ -66,6 +73,8 @@ class LibraryQuery {
     if (cues.isNotEmpty) count++;
     if (tones.isNotEmpty) count++;
     if (categories.isNotEmpty) count++;
+    if (boldness.isNotEmpty) count++;
+    if (usageTypes.isNotEmpty) count++;
     if (minDirectness != kMinDirectness || maxDirectness != kMaxDirectness) {
       count++;
     }
@@ -82,11 +91,25 @@ class LibraryQuery {
   /// the whole library in memory, so filtering there avoids a database round
   /// trip on every keystroke.
   bool matches(OpenerLine line) {
-    final needle = searchText.trim().toLowerCase();
-    if (needle.isNotEmpty) {
-      final japanese = line.japaneseText.toLowerCase();
-      final english = line.englishMeaning?.toLowerCase() ?? '';
-      if (!japanese.contains(needle) && !english.contains(needle)) {
+    final tokens = _searchTokens(searchText);
+    if (tokens.isNotEmpty) {
+      final haystack = _normaliseSearch(<String>[
+        line.japaneseText,
+        line.englishMeaning ?? '',
+        ...line.translations.values,
+        line.koreanRomanization ?? '',
+        line.category.name,
+        line.boldness?.name ?? '',
+        line.usageType?.name ?? '',
+        ...line.tones.map((tone) => tone.name),
+        ...line.topics,
+      ].join(' '));
+      final words = haystack.split(' ').toSet();
+      if (!tokens.every(
+        (token) => token.length == 1
+            ? words.contains(token)
+            : haystack.contains(token),
+      )) {
         return false;
       }
     }
@@ -95,6 +118,12 @@ class LibraryQuery {
     if (line.directness < minDirectness) return false;
     if (line.directness > maxDirectness) return false;
     if (categories.isNotEmpty && !categories.contains(line.category)) {
+      return false;
+    }
+    if (boldness.isNotEmpty && !boldness.contains(line.boldness)) {
+      return false;
+    }
+    if (usageTypes.isNotEmpty && !usageTypes.contains(line.usageType)) {
       return false;
     }
     if (locations.isNotEmpty &&
@@ -159,6 +188,8 @@ class LibraryQuery {
     Set<ObservableCue>? cues,
     Set<Tone>? tones,
     Set<LineCategory>? categories,
+    Set<ConversationBoldness>? boldness,
+    Set<ConversationUsageType>? usageTypes,
     int? minDirectness,
     int? maxDirectness,
     bool? favoritesOnly,
@@ -174,6 +205,8 @@ class LibraryQuery {
       cues: cues ?? this.cues,
       tones: tones ?? this.tones,
       categories: categories ?? this.categories,
+      boldness: boldness ?? this.boldness,
+      usageTypes: usageTypes ?? this.usageTypes,
       minDirectness: minDirectness ?? this.minDirectness,
       maxDirectness: maxDirectness ?? this.maxDirectness,
       favoritesOnly: favoritesOnly ?? this.favoritesOnly,
@@ -182,3 +215,17 @@ class LibraryQuery {
     );
   }
 }
+
+String _normaliseSearch(String value) => value
+    .toLowerCase()
+    .replaceAll(
+      RegExp(r'[^a-z0-9\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+'),
+      ' ',
+    )
+    .trim();
+
+List<String> _searchTokens(String value) =>
+    _normaliseSearch(value)
+        .split(' ')
+        .where((token) => token.isNotEmpty)
+        .toList();

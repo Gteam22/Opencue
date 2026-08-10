@@ -85,9 +85,10 @@ void main() {
     });
 
     test('outer band is dead space until the child layer opens', () {
-      final closed = eightSectors.hitTest(0, -160);
+      // 140 is past depth 0's outer edge (124) but inside depth 1's (150).
+      final closed = eightSectors.hitTest(0, -140);
       expect(closed.zone, RadialZone.beyond);
-      final open = eightSectors.hitTest(0, -160, childLayerOpen: true);
+      final open = eightSectors.hitTest(0, -140, childLayerOpen: true);
       expect(open.zone, RadialZone.childRing);
       expect(open.index, 0);
     });
@@ -103,8 +104,8 @@ void main() {
 
   group('expand and collapse thresholds', () {
     test('expand threshold sits just inside the outer radius', () {
-      expect(eightSectors.crossesExpandThreshold(121), isFalse);
-      expect(eightSectors.crossesExpandThreshold(123), isTrue);
+      expect(eightSectors.crossesExpandThreshold(113), isFalse);
+      expect(eightSectors.crossesExpandThreshold(115), isTrue);
       expect(eightSectors.crossesExpandThreshold(140), isTrue);
     });
 
@@ -207,6 +208,9 @@ void main() {
       expect(nearLeft.isFullCircle, isFalse);
       // Fan centred on three o'clock, opening rightwards.
       expect(nearLeft.startAngle, closeTo(0, 1e-9));
+      // And the centre hugs the left edge, so the fan opens into the space
+      // that exists rather than being centred and clipped on both sides.
+      expect(nearLeft.centreX, RadialGeometry.edgeMargin);
 
       final nearRight = RadialPlacement.solve(
         requestedX: 280,
@@ -217,6 +221,18 @@ void main() {
       );
       // Fan centred on nine o'clock, opening leftwards.
       expect(nearRight.startAngle, closeTo(math.pi, 1e-9));
+      expect(nearRight.centreX, 300 - RadialGeometry.edgeMargin);
+
+      // The direction follows the finger, not the recentred menu: a request
+      // in the left half always opens rightwards, however narrow the area.
+      final farLeft = RadialPlacement.solve(
+        requestedX: 0,
+        requestedY: 400,
+        width: 300,
+        height: 800,
+        radius: 220,
+      );
+      expect(farLeft.startAngle, closeTo(0, 1e-9));
     });
 
     test('handedness rotates a full ring in opposite directions', () {
@@ -235,6 +251,63 @@ void main() {
       expect(auto.startAngle, 0);
       expect(left.startAngle, closeTo(math.pi / 8, 1e-9));
       expect(right.startAngle, closeTo(2 * math.pi - math.pi / 8, 1e-9));
+    });
+  });
+
+  group('layered bands step outward with depth', () {
+    test('each layer sits further out than the one above it', () {
+      for (var depth = 0; depth < 3; depth++) {
+        expect(eightSectors.innerRadiusAt(depth),
+            eightSectors.innerRadius + depth * RadialGeometry.layerStep);
+        expect(eightSectors.outerRadiusAt(depth),
+            greaterThan(eightSectors.innerRadiusAt(depth)));
+      }
+      expect(eightSectors.innerRadiusAt(1),
+          greaterThan(eightSectors.outerRadiusAt(0) - 40));
+    });
+
+    test('three layers fit inside a narrow phone half-width', () {
+      // A 380 pt screen with the menu at the bottom centre leaves about 190 pt
+      // for a half-fan opening upwards. Three layers must fit inside that or
+      // the deepest ring is clipped on a common phone.
+      expect(eightSectors.totalRadiusAt(2), lessThanOrEqualTo(190));
+    });
+
+    test('hit-testing follows the active band', () {
+      // A point at the depth-1 band is a hit at depth 1 and beyond at depth 0.
+      final radius = (eightSectors.innerRadiusAt(1) +
+              eightSectors.outerRadiusAt(1)) /
+          2;
+      final atDepthOne = eightSectors.hitTest(0, -radius, depth: 1);
+      expect(atDepthOne.zone, RadialZone.ring);
+      final atDepthZero = eightSectors.hitTest(0, -radius, depth: 0);
+      expect(atDepthZero.zone, RadialZone.beyond);
+      // Beyond still names the sector, so overshooting never deselects.
+      expect(atDepthZero.index, 0);
+    });
+
+    test('the gap between the dead zone and the band is still live', () {
+      // Requiring the finger to land inside a thin annulus would be exactly
+      // the precision the brief forbids.
+      final justOutsideDeadZone =
+          eightSectors.deadZoneRadius + 4;
+      final hit = eightSectors.hitTest(0, -justOutsideDeadZone);
+      expect(hit.zone, RadialZone.ring);
+      expect(hit.index, 0);
+    });
+
+    test('expand and collapse thresholds move with depth', () {
+      // Bands are 68-124 at depth 0 and 94-150 at depth 1.
+      expect(eightSectors.crossesExpandThreshold(118, depth: 0), isTrue);
+      expect(eightSectors.crossesExpandThreshold(118, depth: 1), isFalse);
+      expect(eightSectors.crossesExpandThreshold(145, depth: 1), isTrue);
+      // Collapse fires once the finger is drawn back inside the band's own
+      // inner edge, so the distance that collapses depth 1 is still well
+      // outside the distance that collapses depth 0.
+      expect(eightSectors.crossesCollapseThreshold(70, depth: 0), isTrue);
+      expect(eightSectors.crossesCollapseThreshold(100, depth: 0), isFalse);
+      expect(eightSectors.crossesCollapseThreshold(98, depth: 1), isTrue);
+      expect(eightSectors.crossesCollapseThreshold(120, depth: 1), isFalse);
     });
   });
 

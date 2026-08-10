@@ -64,7 +64,6 @@ abstract final class RadialIcons {
     'cafe': Icons.local_cafe_outlined,
     'restaurant': Icons.restaurant_outlined,
     'convenienceStore': Icons.storefront_outlined,
-    'convenienceStore2': Icons.storefront_outlined,
     'bar': Icons.local_bar_outlined,
     'standingBar': Icons.sports_bar_outlined,
     'club': Icons.music_note_outlined,
@@ -112,6 +111,7 @@ abstract final class RadialIcons {
     // Tone.
     'register': Icons.record_voice_over_outlined,
     'directness': Icons.speed_outlined,
+    'flirting': Icons.favorite_outline,
     // Finish.
     'showLines': Icons.play_arrow_rounded,
     'presets': Icons.bookmarks_outlined,
@@ -263,6 +263,13 @@ class RadialMenuController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Keeps an open menu open for tapping, after a press that did not travel.
+  void promoteToPinned() {
+    if (_mode == RadialMode.closed) return;
+    _mode = RadialMode.pinned;
+    notifyListeners();
+  }
+
   void close() {
     _mode = RadialMode.closed;
     _highlight = -1;
@@ -357,6 +364,16 @@ class RadialMenuController extends ChangeNotifier {
       case RadialCommand.savePreset:
       case RadialCommand.detailedEditor:
       case RadialCommand.openListFallback:
+      case RadialCommand.browseConversationPlayful:
+      case RadialCommand.browseConversationFlirty:
+      case RadialCommand.browseConversationWitty:
+      case RadialCommand.browseConversationGentleman:
+      case RadialCommand.browseConversationQuestions:
+      case RadialCommand.browseConversationKissing:
+      case RadialCommand.browseConversationNaughty:
+      case RadialCommand.browseConversationIntimate:
+      case RadialCommand.browseConversationGames:
+      case RadialCommand.browseConversationComebacks:
         _pendingCommand = command;
     }
   }
@@ -440,6 +457,15 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
   /// than every pointer move.
   int _lastHapticIndex = -1;
 
+  /// Where the finger went down, so a press that does not travel can be told
+  /// from a drag without waiting for a long-press timer.
+  Offset? _gestureStart;
+  bool _gestureMoved = false;
+
+  /// How far the finger may wander and still count as a tap. Matches
+  /// Flutter's own touch slop.
+  static const double _tapSlop = 18;
+
   /// Focus for keyboard navigation on desktop.
   final FocusNode _focusNode = FocusNode(debugLabel: 'radialMenu');
 
@@ -491,7 +517,7 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
       requestedY: local.dy,
       width: size.width,
       height: size.height,
-      radius: _geometry.childOuterRadius + 28,
+      radius: _geometry.totalRadiusAt(2),
       safeLeft: padding.left,
       safeTop: padding.top,
       safeRight: padding.right,
@@ -525,6 +551,17 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
     );
   }
 
+  /// Turns a press that never travelled into a pinned, browsable menu.
+  void _promoteToPinned() {
+    if (!_controller.isOpen) return;
+    _controller.promoteToPinned();
+    _controller.setHighlight(-1);
+    _focusNode.requestFocus();
+  }
+
+  /// How deep the open path currently is, which decides which band is live.
+  int get _depth => _controller.path.length - 1;
+
   void _closeMenu({bool cancelled = false}) {
     if (cancelled) _haptic(HapticFeedback.lightImpact);
     _controller.close();
@@ -541,13 +578,14 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
       local.dx - _centre.dx,
       local.dy - _centre.dy,
       childLayerOpen: _childLayerOpen,
+      depth: _depth,
     );
 
     if (hit.zone == RadialZone.deadZone) {
       // Drawn back to the centre: close the child layer, then step up a
       // layer if drawn back again after the collapse settles.
-      if (_childLayerOpen &&
-          _geometry.crossesCollapseThreshold(hit.distance)) {
+      if (_depth > 0 &&
+          _geometry.crossesCollapseThreshold(hit.distance, depth: _depth)) {
         setState(() => _childLayerOpen = false);
         _controller.back();
         _syncGeometry();
@@ -563,8 +601,7 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
         }
       }
       // Crossing outward over the threshold opens the highlighted branch.
-      if (!_childLayerOpen &&
-          _geometry.crossesExpandThreshold(hit.distance)) {
+      if (_geometry.crossesExpandThreshold(hit.distance, depth: _depth)) {
         final node = _controller.visibleSectors[hit.index];
         if (node.isBranch) {
           if (_controller.enterHighlighted()) {
@@ -588,6 +625,7 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
       local.dx - _centre.dx,
       local.dy - _centre.dy,
       childLayerOpen: _childLayerOpen,
+      depth: _depth,
     );
 
     if (!hit.selectsSomething) {
@@ -600,10 +638,11 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
     _controller.setHighlight(hit.index);
     final node = _controller.visibleSectors[hit.index];
     if (node.isBranch) {
-      // Released on a branch: reopen pinned at that branch rather than
-      // guessing a child, so a short gesture cannot select by accident.
+      // Lifted off over a branch rather than a leaf. Descend into it and leave
+      // the menu open at that layer: guessing a child would select something
+      // the user never pointed at.
       _controller.enterHighlighted();
-      _controller._mode = RadialMode.pinned;
+      _controller.promoteToPinned();
       _syncGeometry();
       setState(() {});
       return;
@@ -644,6 +683,7 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
     final hit = _geometry.hitTest(
       localPosition.dx - _centre.dx,
       localPosition.dy - _centre.dy,
+      depth: _depth,
     );
     if (hit.zone == RadialZone.deadZone) {
       // Centre tap finishes.
@@ -743,10 +783,15 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
               child: _buildMenuSurface(strings),
             ),
           ],
+          // Bottom centre, not bottom right: the corner sat on top of the
+          // composer's own Show lines button, and the centre is reachable with
+          // either thumb, which is also what the handedness setting rotates
+          // the ring around.
           Positioned(
-            right: 16,
-            bottom: 16,
-            child: _buildTrigger(context, strings),
+            left: 0,
+            right: 0,
+            bottom: 24,
+            child: Center(child: _buildTrigger(context, strings)),
           ),
         ],
       ),
@@ -768,16 +813,52 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
       button: true,
       label: strings.t('radial.hint.holdDrag'),
       hint: strings.t('radial.hint.tapToPin'),
-      child: GestureDetector(
-        onTap: () => _openMenu(
-          pinned: true,
-          globalPosition: _triggerGlobalCentre(context),
-        ),
-        onLongPressStart: (details) =>
-            _openMenu(pinned: false, globalPosition: details.globalPosition),
-        onLongPressMoveUpdate: (details) =>
-            _onDragUpdate(details.globalPosition),
-        onLongPressEnd: (details) => _onDragEnd(details.globalPosition),
+      // Raw pointer events rather than GestureDetector.
+      //
+      // The first version used onLongPressStart, which does not fire until the
+      // finger has been down for about half a second. Before that the tap
+      // recogniser wins, so an ordinary press opened pinned mode and the drag
+      // was unreachable: it behaved as a button shaped like a radial menu,
+      // which is exactly what it felt like.
+      //
+      // Now the ring opens on pointer *down*, immediately, and what happens on
+      // release decides the mode:
+      //
+      //   press, drag to a sector, lift  -> selects that sector
+      //   press and lift without moving  -> menu stays open, tap to browse
+      //
+      // One code path, no timing threshold, and nothing to learn: a tap still
+      // pins the menu because a tap is just a drag that went nowhere.
+      child: Listener(
+        onPointerDown: (event) {
+          _gestureStart = event.position;
+          _gestureMoved = false;
+          _openMenu(pinned: false, globalPosition: event.position);
+        },
+        onPointerMove: (event) {
+          final start = _gestureStart;
+          if (start != null &&
+              (event.position - start).distance > _tapSlop) {
+            _gestureMoved = true;
+          }
+          if (_controller.mode == RadialMode.held) {
+            _onDragUpdate(event.position);
+          }
+        },
+        onPointerUp: (event) {
+          if (!_gestureMoved) {
+            // A press that never travelled. Keep the ring open for browsing
+            // rather than selecting whatever happens to sit under the thumb.
+            _promoteToPinned();
+          } else {
+            _onDragEnd(event.position);
+          }
+          _gestureStart = null;
+        },
+        onPointerCancel: (_) {
+          _gestureStart = null;
+          _closeMenu(cancelled: true);
+        },
         child: Material(
           color: scheme.primaryContainer,
           elevation: 3,
@@ -858,7 +939,11 @@ class _ContextRadialMenuState extends State<ContextRadialMenu>
   Widget _semanticSectorTarget(
       int index, RadialMenuNode node, AppLocalizations strings) {
     final angle = _geometry.centreAngleOf(index);
-    final radius = (_geometry.innerRadius + _geometry.outerRadius) / 2;
+    // The screen-reader targets must follow the active band outward too, or
+    // they would drift off the visible sectors as the user descends.
+    final radius = (_geometry.innerRadiusAt(_depth) +
+            _geometry.outerRadiusAt(_depth)) /
+        2;
     final dx = _centre.dx + radius * math.sin(angle);
     final dy = _centre.dy - radius * math.cos(angle);
     final selected = node.action != null &&
@@ -1027,8 +1112,25 @@ class _RadialPainter extends CustomPainter {
     final sectors = controller.visibleSectors;
     if (sectors.isEmpty) return;
     final t = Curves.easeOutCubic.transform(progress.value);
-    final inner = geometry.innerRadius * t;
-    final outer = geometry.outerRadius * t;
+    final depth = controller.path.length - 1;
+    // The active band steps outward with depth, so descending a layer grows
+    // the ring rather than replacing it in place.
+    final inner = geometry.innerRadiusAt(depth) * t;
+    final outer = geometry.outerRadiusAt(depth) * t;
+
+    // Ancestors stay on screen as thin trace arcs, one per layer already
+    // walked, so the path is legible without reading the breadcrumb.
+    final tracePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..color = colorScheme.primary.withValues(alpha: 0.35);
+    for (var ancestor = 0; ancestor < depth; ancestor++) {
+      canvas.drawCircle(
+        centre,
+        geometry.traceRadiusAt(ancestor + 1) * t,
+        tracePaint,
+      );
+    }
 
     final basePaint = Paint()..style = PaintingStyle.fill;
     final strokePaint = Paint()

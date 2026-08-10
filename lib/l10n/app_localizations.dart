@@ -19,19 +19,38 @@ import 'strings_ja.dart';
 /// * [LanguageMode.bilingual] — interface in English, and both the Japanese
 ///   line and the English meaning are shown everywhere a line appears.
 class AppLocalizations {
-  const AppLocalizations(this.mode);
+  const AppLocalizations(this.mode, {bool romanizeKorean = false})
+      : _romanizeKorean = romanizeKorean;
 
   final LanguageMode mode;
+
+  /// Whether Korean lines carry a Roman reading. Comes from the settings
+  /// toggle, threaded through AppScope.
+  final bool _romanizeKorean;
 
   static const AppLocalizations fallback =
       AppLocalizations(LanguageMode.bilingual);
 
   /// Which table to read interface strings from.
+  ///
+  /// Korean chrome is not yet translated, so Korean and Both use the English
+  /// interface (via [LanguageModeText.interfaceLanguage]) while the opener
+  /// cards themselves show Korean.
   Map<String, String> get _table =>
-      mode == LanguageMode.japanese ? stringsJa : stringsEn;
+      mode.interfaceLanguage == LanguageMode.japanese ? stringsJa : stringsEn;
 
-  /// Whether the English meaning is shown alongside the Japanese line.
+  /// Whether the English meaning is shown alongside a line.
+  ///
+  /// Shown in every mode except pure Japanese, including Korean and Both,
+  /// because the English meaning is the metadata the brief asks to preserve.
   bool get showEnglishMeaning => mode != LanguageMode.japanese;
+
+  /// Whether the Roman reading is shown under Korean lines. True only when the
+  /// setting is on and Korean lines are actually being shown.
+  bool get showKoreanRomanization => _romanizeKorean && mode.showsKorean;
+
+  bool get showsJapaneseLines => mode.showsJapanese;
+  bool get showsKoreanLines => mode.showsKorean;
 
   /// Looks up [key]. Falls back to English, then to the key itself, so a
   /// missing string shows up as an obvious defect rather than a blank label.
@@ -71,6 +90,12 @@ class AppLocalizations {
   String avoidCondition(AvoidCondition value) => t('avoid.${value.name}');
 
   String category(LineCategory value) => t('category.${value.name}');
+
+  String boldness(ConversationBoldness value) =>
+      t('boldness.${value.name}');
+
+  String usageType(ConversationUsageType value) =>
+      t('usageType.${value.name}');
 
   String outcome(InteractionOutcome value) => t('outcome.${value.name}');
 

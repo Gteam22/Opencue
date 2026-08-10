@@ -146,6 +146,44 @@ class AppDatabase {
     );
   }
 
+  /// Version 4 added Korean (and, structurally, any language) to a line.
+  ///
+  /// Two nullable columns, added to the existing table rather than a new one:
+  /// `translations` holds a JSON object keyed by language code, and
+  /// `korean_romanization` holds the Roman reading. Nullable and additive, so
+  /// every existing row stays valid and the Japanese text is untouched.
+  static Future<void> _migrateV3ToV4(Database db) async {
+    await db.execute('ALTER TABLE opener_lines ADD COLUMN translations TEXT');
+    await db.execute(
+      'ALTER TABLE opener_lines ADD COLUMN korean_romanization TEXT',
+    );
+  }
+
+  /// Version 5 adds metadata for the manually browsed conversation library.
+  /// Existing situational lines keep null metadata and remain recommendable.
+  static Future<void> _migrateV4ToV5(Database db) async {
+    await db.execute('ALTER TABLE opener_lines ADD COLUMN boldness TEXT');
+    await db.execute('ALTER TABLE opener_lines ADD COLUMN usage_type TEXT');
+    await db.execute(
+      "ALTER TABLE opener_lines ADD COLUMN topics TEXT NOT NULL DEFAULT ''",
+    );
+    await db.execute(
+      'ALTER TABLE opener_lines ADD COLUMN manual_only INTEGER NOT NULL '
+      'DEFAULT 0',
+    );
+    await db.execute(
+      'ALTER TABLE opener_lines ADD COLUMN tts_japanese INTEGER NOT NULL '
+      'DEFAULT 1',
+    );
+    await db.execute(
+      'ALTER TABLE opener_lines ADD COLUMN tts_korean INTEGER NOT NULL '
+      'DEFAULT 1',
+    );
+    await db.execute(
+      'CREATE INDEX idx_lines_manual_only ON opener_lines (manual_only)',
+    );
+  }
+
   static Future<void> _onCreate(Database db, int version) async {
     await _createV1(db);
     // A fresh install runs the same migration steps as an upgrade, so the two
@@ -163,6 +201,12 @@ class AppDatabase {
     }
     if (oldVersion < 3 && newVersion >= 3) {
       await _migrateV2ToV3(db);
+    }
+    if (oldVersion < 4 && newVersion >= 4) {
+      await _migrateV3ToV4(db);
+    }
+    if (oldVersion < 5 && newVersion >= 5) {
+      await _migrateV4ToV5(db);
     }
     // Future migrations append here. Never edit an existing step.
   }

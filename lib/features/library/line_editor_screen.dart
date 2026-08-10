@@ -121,6 +121,8 @@ class _LineEditorScreenState extends State<LineEditorScreen> {
       englishMeaning: _english.text.trim().isEmpty
           ? null
           : _english.text.trim(),
+      translations: existing?.translations,
+      koreanRomanization: existing?.koreanRomanization,
       category: _category,
       locations: _locations,
       activities: _activities,
@@ -129,6 +131,12 @@ class _LineEditorScreenState extends State<LineEditorScreen> {
       noiseLevels: _noiseLevels,
       tones: _tones,
       directness: _directness,
+      boldness: existing?.boldness,
+      usageType: existing?.usageType,
+      topics: existing?.topics,
+      manualOnly: existing?.manualOnly ?? false,
+      ttsJapanese: existing?.ttsJapanese ?? true,
+      ttsKorean: existing?.ttsKorean ?? true,
       conditions: _conditions,
       avoidConditions: _avoidConditions,
       followUpSuggestion:

@@ -149,12 +149,33 @@ class AppTheme {
     );
   }
 
-  /// Style for the English meaning beneath a Japanese line.
+  /// Style for the English meaning beneath a line.
   static TextStyle englishMeaning(BuildContext context) {
     final theme = Theme.of(context);
     return (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
       color: theme.colorScheme.onSurfaceVariant,
       height: 1.35,
+    );
+  }
+
+  /// Style for a Korean opener line. Same weight and size as the Japanese
+  /// body so neither language looks subordinate in Both mode.
+  static TextStyle koreanBody(BuildContext context) {
+    final theme = Theme.of(context);
+    return (theme.textTheme.titleMedium ?? const TextStyle()).copyWith(
+      height: 1.45,
+      color: theme.colorScheme.onSurface,
+    );
+  }
+
+  /// Style for the Roman reading under a Korean line: lighter and slightly
+  /// italic, so it reads as a pronunciation aid rather than a second line.
+  static TextStyle koreanRomanization(BuildContext context) {
+    final theme = Theme.of(context);
+    return (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+      fontStyle: FontStyle.italic,
+      height: 1.3,
     );
   }
 }

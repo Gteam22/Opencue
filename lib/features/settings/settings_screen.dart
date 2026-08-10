@@ -9,6 +9,7 @@ import '../../core/theme.dart';
 import '../../data/scan/phone_camera_frame_source.dart';
 import '../../data/scan/scan_capability.dart';
 import '../../data/transfer/transfer_service.dart';
+import '../../data/speech/speech_capability.dart';
 import '../../domain/enums/enums.dart';
 import '../shared/app_scope.dart';
 import '../shared/widgets.dart';
@@ -42,11 +43,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SectionCard(
                 title: strings.t('settings.language'),
                 subtitle: strings.t('settings.languageHint'),
-                child: SingleSelectChips<LanguageMode>(
-                  values: LanguageMode.values,
-                  selected: settings.languageMode,
-                  labelFor: strings.languageMode,
-                  onChanged: state.setLanguage,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    SingleSelectChips<LanguageMode>(
+                      values: LanguageMode.values,
+                      selected: settings.languageMode,
+                      labelFor: strings.languageMode,
+                      onChanged: state.setLanguage,
+                    ),
+                    if (SpeechCapability.hasImplementation &&
+                        settings.languageMode.showsJapanese) ...<Widget>[
+                      const SizedBox(height: 4),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: settings.japaneseTtsEnabled,
+                        onChanged: (value) => state.updateSettings(
+                          settings.copyWith(japaneseTtsEnabled: value),
+                        ),
+                        title: Text(strings.t('settings.japaneseTts')),
+                        subtitle: Text(strings.t('settings.japaneseTtsNote')),
+                      ),
+                    ],
+                    // Only meaningful when Korean lines are on show, so it
+                    // appears for Korean and Both and stays hidden otherwise
+                    // rather than sitting there doing nothing.
+                    if (settings.languageMode.showsKorean) ...<Widget>[
+                      const SizedBox(height: 4),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: settings.showKoreanRomanization,
+                        onChanged: (value) => state.updateSettings(
+                          settings.copyWith(showKoreanRomanization: value),
+                        ),
+                        title: Text(
+                          strings.t('settings.showKoreanRomanization'),
+                        ),
+                        subtitle: Text(
+                          strings.t('settings.showKoreanRomanizationNote'),
+                        ),
+                      ),
+                      // Speech controls appear only where the platform can
+                      // actually speak, so Windows never shows a dead toggle.
+                      if (SpeechCapability.hasImplementation) ...<Widget>[
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: settings.koreanTtsEnabled,
+                          onChanged: (value) => state.updateSettings(
+                            settings.copyWith(koreanTtsEnabled: value),
+                          ),
+                          title: Text(strings.t('settings.koreanTts')),
+                          subtitle: Text(strings.t('settings.koreanTtsNote')),
+                        ),
+                      ],
+                    ],
+                    if (SpeechCapability.hasImplementation &&
+                        ((settings.languageMode.showsJapanese &&
+                                settings.japaneseTtsEnabled) ||
+                            (settings.languageMode.showsKorean &&
+                                settings.koreanTtsEnabled))) ...<Widget>[
+                      const SizedBox(height: 12),
+                      Text(
+                        strings.t('settings.speechRate'),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      SingleSelectChips<SpeechRatePreset>(
+                        values: SpeechRatePreset.values,
+                        selected: settings.speechRate,
+                        labelFor: (rate) =>
+                            strings.t('speechRate.${rate.name}'),
+                        onChanged: (rate) => state.updateSettings(
+                          settings.copyWith(speechRate: rate),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(height: AppTheme.gap),

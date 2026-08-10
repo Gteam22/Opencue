@@ -452,6 +452,24 @@ add('history.bestLinesNote',
 add('settings.title', 'Settings', '設定')
 add('settings.appearance', 'Appearance', '表示')
 add('settings.language', 'Interface language', '表示言語')
+add('settings.showKoreanRomanization', 'Show Korean romanization',
+    '韓国語のローマ字表記を表示')
+add('settings.showKoreanRomanizationNote',
+    'Show an easy-to-read pronunciation under each Korean line.',
+    '韓国語の各行の下に読みやすい発音を表示します。')
+add('settings.koreanTts', 'Read Korean aloud', '韓国語を音声で読み上げ')
+add('settings.koreanTtsNote',
+    'Show a speaker button to hear each Korean line spoken.',
+    '各韓国語の行を音声で聞くための再生ボタンを表示します。')
+add('settings.speechRate', 'Speech speed', '読み上げ速度')
+add('tts.speak', 'Play Korean', '韓国語を再生')
+add('tts.stop', 'Stop', '停止')
+add('tts.unavailable', 'Korean voice not installed', '韓国語の音声が未インストール')
+add('tts.unavailableDetail',
+    'No Korean voice is installed on this device. Add a Korean voice in your '
+    'device text-to-speech settings to hear lines spoken.',
+    'この端末に韓国語の音声がインストールされていません。端末の音声読み上げ設定で'
+    '韓国語の音声を追加すると、行を音声で聞けます。')
 add('settings.languageHint',
     'Lines are always shown in Japanese. This setting controls the interface '
     'and whether the English meaning appears underneath.',
@@ -850,12 +868,19 @@ SORTS = {
 LANGUAGES = {
     'japanese': ('Japanese', '日本語'),
     'english': ('English', 'English'),
-    'bilingual': ('Bilingual', '日本語と英語'),
+    'bilingual': ('Japanese + English', '日本語と英語'),
+    'korean': ('Korean', '韓国語'),
+    'both': ('Japanese + Korean', '日本語と韓国語'),
 }
 THEMES = {
     'light': ('Light', 'ライト'),
     'dark': ('Dark', 'ダーク'),
     'system': ('Match system', 'システムに合わせる'),
+}
+SPEECH_RATES = {
+    'slow': ('Slow', 'ゆっくり'),
+    'normal': ('Normal', 'ふつう'),
+    'fast': ('Fast', '速い'),
 }
 SOURCES = {
     'manual': ('Entered by hand', '手入力'),
@@ -911,7 +936,7 @@ for prefix, table in (
     ('cue', CUES), ('condition', CONDITIONS), ('avoid', AVOIDS),
     ('category', CATEGORIES), ('outcome', OUTCOMES), ('sort', SORTS),
     ('language', LANGUAGES), ('theme', THEMES), ('source', SOURCES),
-    ('factor', FACTORS),
+    ('speechRate', SPEECH_RATES), ('factor', FACTORS),
 ):
     for name, (en, ja) in table.items():
         add('%s.%s' % (prefix, name), en, ja)
@@ -922,14 +947,25 @@ for prefix, table in (
 # ---------------------------------------------------------------------------
 # Root sectors. Short by design: these render inside ring sectors.
 add('radial.root', 'Situation', '状況')
-add('radial.place', 'Place', '場所')
+# Seven root sectors, clockwise from twelve, in the order the user asked for.
+add('radial.location', 'Location', '場所')
 add('radial.people', 'People', '人数・状況')
-add('radial.activity', 'Activity', '行動')
-add('radial.cue', 'Cue', 'きっかけ')
-add('radial.atmosphere', 'Atmosphere', '雰囲気')
-add('radial.tone', 'Tone', 'トーン')
+add('radial.loudness', 'Loudness', '騒がしさ')
+add('radial.surroundings', 'Surroundings', '周りの様子')
+add('radial.action', 'Action', '行動')
+add('radial.other', 'Other', 'その他')
+add('radial.directness', 'Directness', '率直さ')
+# Second-layer headings that survive from the earlier arrangement.
 add('radial.caution', 'Caution', '注意')
 add('radial.finish', 'Finish', '完了')
+# Retained: 'radial.place', 'radial.activity', 'radial.cue' and
+# 'radial.atmosphere' are no longer used by the tree, but the keys stay so a
+# saved preset or a stored diagnostic written by 0.1.x still resolves.
+add('radial.place', 'Location', '場所')
+add('radial.activity', 'Action', '行動')
+add('radial.cue', 'Surroundings', '周りの様子')
+add('radial.atmosphere', 'Loudness', '騒がしさ')
+add('radial.tone', 'Tone', 'トーン')
 
 # Place groups.
 add('radial.place.foodDrink', 'Food & drink', '飲食')

@@ -108,6 +108,25 @@ class LineDetailScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
+                      if (line.boldness != null)
+                        _TagRow(
+                          label: strings.t('library.boldness'),
+                          values: <String>[
+                            strings.boldness(line.boldness!),
+                          ],
+                        ),
+                      if (line.usageType != null)
+                        _TagRow(
+                          label: strings.t('library.usageType'),
+                          values: <String>[
+                            strings.usageType(line.usageType!),
+                          ],
+                        ),
+                      if (line.topics.isNotEmpty)
+                        _TagRow(
+                          label: strings.t('library.topics'),
+                          values: line.topics.toList()..sort(),
+                        ),
                       _TagRow(
                         label: strings.t('editor.locations'),
                         values: line.locations.map(strings.location).toList(),

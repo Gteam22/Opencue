@@ -80,7 +80,7 @@ List<ContextChipData> contextChipsFor(
   add(
     ContextDimension.noiseLevel,
     strings.noiseLevel(draft.noiseLevel),
-    'atmosphere.noise',
+    'atmosphere',
   );
   for (final cue in draft.cues) {
     chips.add(ContextChipData(
