@@ -600,6 +600,46 @@ void main() {
     expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
   });
 
+  test('Android error_client from an intentional stop is ignored', () async {
+    final recognition = FakeConversationRecognitionService()
+      ..errorClientOnStop = true;
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'error-client-reply',
+      japaneseText: '今はいないですよ。',
+      topics: const <String>{'relationship_status'},
+    );
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.result('彼女いますか？', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 320));
+
+    expect(controller.errorMessage, isNull);
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.result, isNotNull);
+    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+    expect(recognition.startCount, 2);
+  });
+
+  test('a spontaneous Android error_client gets a bounded retry', () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.error('error_client', permanent: true);
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.errorMessage, isNull);
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    expect(recognition.startCount, 2);
+    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+  });
+
   test('Auto Speak suppresses self-voice and resumes recognition', () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService()..hold();
@@ -870,6 +910,7 @@ class FakeConversationRecognitionService
   int stopCount = 0;
   int cancelCount = 0;
   int disposeCount = 0;
+  bool errorClientOnStop = false;
   final List<ConversationInputLanguage> languages =
       <ConversationInputLanguage>[];
 
@@ -895,10 +936,16 @@ class FakeConversationRecognitionService
 
   void status(String status) => callbacks!.onStatus(status);
 
+  void error(String message, {required bool permanent}) =>
+      callbacks!.onError(message, permanent: permanent);
+
   @override
   Future<void> stop() async {
     started = false;
     stopCount++;
+    if (errorClientOnStop) {
+      callbacks!.onError('error_client', permanent: true);
+    }
   }
 
   @override

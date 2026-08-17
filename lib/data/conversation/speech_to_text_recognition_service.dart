@@ -47,7 +47,11 @@ class SpeechToTextRecognitionService
       pauseFor: const Duration(milliseconds: 800),
       partialResults: true,
       cancelOnError: true,
-      onDevice: true,
+      // Do not force Android's offline recognizer. Many devices report
+      // `error_client` when the requested JA/KO locale has no downloaded
+      // on-device pack. The platform default can still choose an installed
+      // offline engine, but also works with the device's normal recognizer.
+      onDevice: false,
       listenMode: ListenMode.dictation,
     );
   }

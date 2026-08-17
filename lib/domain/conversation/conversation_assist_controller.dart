@@ -91,6 +91,7 @@ class ConversationAssistController extends ChangeNotifier {
   double _speechRate = 0.5;
   bool _japaneseTtsEnabled = true;
   bool _koreanTtsEnabled = true;
+  int _consecutiveClientErrors = 0;
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
@@ -161,6 +162,7 @@ class ConversationAssistController extends ChangeNotifier {
     _confidence = 0;
     _errorMessage = null;
     _finalizing = false;
+    _consecutiveClientErrors = 0;
     _listenModeActive = true;
     _startVadTimer();
     await _startRecognitionCycle();
@@ -807,10 +809,12 @@ class ConversationAssistController extends ChangeNotifier {
     }
   }
 
-  void _scheduleRecognitionRestart() {
+  void _scheduleRecognitionRestart({
+    Duration delay = const Duration(milliseconds: 120),
+  }) {
     if (!_listenModeActive || _suppressRecognition || _closed) return;
     _restartTimer?.cancel();
-    _restartTimer = Timer(const Duration(milliseconds: 120), () {
+    _restartTimer = Timer(delay, () {
       unawaited(_startRecognitionCycle());
     });
   }
@@ -868,6 +872,7 @@ class ConversationAssistController extends ChangeNotifier {
       return;
     }
     if (text.trim().isNotEmpty) _transcript = text.trim();
+    if (text.trim().isNotEmpty) _consecutiveClientErrors = 0;
     _confidence = confidence;
     if (_transcript.isNotEmpty &&
         _phase == ConversationAssistPhase.waitingForSpeech) {
@@ -907,8 +912,23 @@ class ConversationAssistController extends ChangeNotifier {
   }
 
   void _onRecognitionError(String message, {required bool permanent}) {
-    _errorMessage = message;
     final normalized = message.toLowerCase();
+    // Android may emit ERROR_CLIENT as the recognizer acknowledges our own
+    // stop/cancel request. That is lifecycle noise, not a failed user turn.
+    if (_deliberateRecognizerStop || _suppressRecognition) return;
+    if (normalized.contains('error_client') && _listenModeActive) {
+      _recognizerActive = false;
+      _consecutiveClientErrors++;
+      if (_consecutiveClientErrors <= 2) {
+        _errorMessage = null;
+        _setPhase(ConversationAssistPhase.waitingForSpeech);
+        _scheduleRecognitionRestart(
+          delay: const Duration(milliseconds: 400),
+        );
+        return;
+      }
+    }
+    _errorMessage = message;
     if (normalized.contains('no_match') ||
         normalized.contains('speech_timeout')) {
       _recognizerActive = false;

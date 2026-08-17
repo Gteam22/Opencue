@@ -1,20 +1,20 @@
 # OpenCue
 
 A multilingual conversation assistant and curated Japanese/Korean line library.
-Tap **Listen** for one short conversation turn and OpenCue transcribes it,
-detects Japanese, Korean or English, then suggests three relevant replies in
-your chosen output-language mode. Manual situation recommendations and the
-environmental Scan remain available as secondary tools.
+Enable **Listen Mode** once and OpenCue waits for conversational turns,
+transcribes them, detects Japanese, Korean or English, then suggests three
+relevant replies in your chosen output-language mode. Manual situation
+recommendations and the environmental Scan remain available as secondary tools.
 
 A personal library of Japanese conversation openers with an offline
 recommendation engine. You describe the situation you are actually in, and
 OpenCue suggests a few lines that fit it — or tells you that this is probably not
 a good moment to say anything.
 
-There is no account or OpenCue server. Listening is deliberate rather than
-continuous, recognition requests on-device processing, and OpenCue never writes
-raw microphone audio to disk. Camera access is confined to the optional Scan
-tool.
+There is no account or OpenCue server. Listening runs only while the user keeps
+Listen Mode enabled, and OpenCue never writes raw microphone audio to disk. The
+operating-system speech service decides whether recognition is local or uses
+its configured provider. Camera access is confined to the optional Scan tool.
 
 ---
 
@@ -24,9 +24,9 @@ tool.
 
 - Holds a library of openers, each with the Japanese line and its English
   meaning, plus the situations it suits and the situations it does not.
-- Listens to one short incoming utterance after a tap and ranks approximately
-  three library-backed replies by meaning, topic, usage type, tone and the
-  user's manually selected boldness.
+- Automatically detects incoming utterances while Listen Mode is enabled and
+  ranks approximately three library-backed replies by meaning, topic, usage
+  type, tone and the user's manually selected boldness.
 - Lets you describe where you are and what you can see, and returns up to three
   suggestions: a **safest** one, a **playful** one and a **more direct** one.
 - Warns you, prominently, when the situation you described suggests approaching
@@ -144,11 +144,12 @@ working: manual situation entry, the library and recommendations are unaffected.
 
 ### Microphone permission
 
-Requested only after you enable **Listen Mode** in Conversation Assist. The
-platform speech recognizer is configured for on-device recognition;
-Japanese, Korean and English availability depends on the speech languages
-installed on the phone. Declining leaves transcript typing, the library, Scan
-and manual recommendations working.
+Requested only after you enable **Listen Mode** in Conversation Assist. OpenCue
+uses the phone's normal speech-recognition service rather than forcing an
+offline engine, because Android reports `error_client` when the requested
+offline JA/KO pack is missing. The operating system may still choose an
+installed offline recognizer. Declining leaves transcript typing, the library,
+Scan and manual recommendations working.
 
 OpenCue receives partial/final transcript events and confidence from the device
 service. It does not create an audio file or retain raw audio. While Listen
@@ -274,7 +275,7 @@ is production-ready.
 | `camera` | The Flutter team's own plugin, and the only one with a first-party Windows implementation, so declaring it does not put the desktop build at risk. |
 | `google_mlkit_image_labeling` | On-device labelling from the maintained `flutter-ml` wrapper, not the deprecated Firebase ML APIs. **Labelling only** — no face detection, no object detection, no OCR — because "what kind of place is this" is the only question asked. |
 | `permission_handler` | Distinguishes *denied* from *permanently denied*, which the camera plugin cannot, and which the two permission screens depend on. |
-| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for persistent Listen Mode windows, partial results, sound-level events and JA/KO/EN locale selection. OpenCue requests on-device recognition and stores no audio. |
+| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for persistent Listen Mode windows, partial results, sound-level events and JA/KO/EN locale selection. OpenCue stores no audio and does not force an unavailable Android offline language pack. |
 | `sqflite` | The Android SQLite implementation. Same `sqflite_common` API as the desktop FFI build, so no repository code differs. |
 
 ### Conversation Assist pipeline
