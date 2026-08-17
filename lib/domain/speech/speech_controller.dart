@@ -41,6 +41,13 @@ class SpeechController extends ChangeNotifier {
   /// to this to decide whether to show the speaking indicator.
   String? get speakingLineId => _speakingLineId;
 
+  String? get speakingLanguageCode {
+    final key = _speakingKey;
+    if (key == null) return null;
+    final separator = key.indexOf(':');
+    return separator < 0 ? null : key.substring(0, separator);
+  }
+
   bool isSpeaking(String lineId) => _speakingLineId == lineId;
 
   bool isSpeakingLanguage(String lineId, String languageCode) =>

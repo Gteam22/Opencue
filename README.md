@@ -42,9 +42,9 @@ tool.
 - It never guarantees a reception, and it does not score or rate other people.
 - It stores nothing about anyone's appearance, availability, or interest — only
   the situation you typed in.
-- It never listens continuously or in the background. Microphone access starts
-  only after **Listen**, and the transient transcript history is cleared when
-  the Conversation Assist screen closes.
+- It never listens in the background. Microphone access starts only while
+  **Listen Mode** is enabled, stops when the user disables it or leaves the
+  screen, and the transient transcript history is then cleared.
 - Adult suggestions are off by default and never activate from time, place,
   proximity or alcohol. They require explicit opt-in and a manual boldness
   limit.
@@ -144,19 +144,22 @@ working: manual situation entry, the library and recommendations are unaffected.
 
 ### Microphone permission
 
-Requested only after you tap **Listen** in Conversation Assist. The platform
-speech recognizer is configured for on-device recognition and short phrases;
+Requested only after you enable **Listen Mode** in Conversation Assist. The
+platform speech recognizer is configured for on-device recognition;
 Japanese, Korean and English availability depends on the speech languages
 installed on the phone. Declining leaves transcript typing, the library, Scan
 and manual recommendations working.
 
 OpenCue receives partial/final transcript events and confidence from the device
-service. It does not create an audio file, retain raw audio, or keep listening
-after voice activity ends (about 3.4 seconds of silence) or the user taps Stop.
-Partial text updates only the visible transcript. A provider final event,
-provider stop event, VAD stop, or manual transcript confirmation all converge
-on the same finalized-utterance pipeline, which normalizes, classifies and
-replaces the cue set automatically. Duplicate finals and low-value acknowledgments
+service. It does not create an audio file or retain raw audio. While Listen
+Mode is on, adaptive VAD detects sustained speech relative to the ambient noise
+floor and finalizes a turn after about 700 ms of silence. Platform recognition
+windows restart automatically until the user taps Stop. Partial text updates
+only the visible transcript. A provider final event, provider stop event, VAD
+stop, or manual transcript confirmation all converge on the same finalized-
+utterance pipeline, which normalizes, classifies and replaces the cue set
+automatically. TTS temporarily suppresses recognition and listening resumes as
+soon as playback completes. Duplicate finals and low-value acknowledgments
 preserve the existing cues. A platform confidence of zero is treated as
 unavailable rather than as failed recognition. The last six finalized turns are
 memory-only context for follow-up turns.
@@ -271,18 +274,20 @@ is production-ready.
 | `camera` | The Flutter team's own plugin, and the only one with a first-party Windows implementation, so declaring it does not put the desktop build at risk. |
 | `google_mlkit_image_labeling` | On-device labelling from the maintained `flutter-ml` wrapper, not the deprecated Firebase ML APIs. **Labelling only** — no face detection, no object detection, no OCR — because "what kind of place is this" is the only question asked. |
 | `permission_handler` | Distinguishes *denied* from *permanently denied*, which the camera plugin cannot, and which the two permission screens depend on. |
-| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for short, user-triggered phrases, partial results, sound-level events and JA/KO/EN locale selection. OpenCue requests on-device recognition and stores no audio. |
+| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for persistent Listen Mode windows, partial results, sound-level events and JA/KO/EN locale selection. OpenCue requests on-device recognition and stores no audio. |
 | `sqflite` | The Android SQLite implementation. Same `sqflite_common` API as the desktop FFI build, so no repository code differs. |
 
 ### Conversation Assist pipeline
 
 ```text
-Listen tap -> platform speech recognizer -> sound-level VAD / final result
-           -> script language detection (JA / KO / EN)
-           -> multilingual intent + topic interpretation
-           -> adult/boldness safety filter
-           -> curated-library semantic ranking + repetition penalty
-           -> three response cards using the existing JP/KR/EN + TTS widgets
+Listen Mode -> waiting / adaptive sound-level VAD -> streaming partial text
+            -> finalized utterance + monotonic turn ID
+            -> script language detection (JA / KO / EN)
+            -> multilingual intent + rolling conversation context
+            -> adult/boldness safety filter
+            -> primary curated-library response -> display / optional TTS
+            -> same-intent Standard / Humorous / Flirty variants
+            -> suppress recognition during TTS -> automatically wait again
 ```
 
 `ConversationRecognitionService` isolates platform capture, and

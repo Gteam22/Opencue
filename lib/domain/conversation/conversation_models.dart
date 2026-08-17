@@ -50,7 +50,7 @@ enum ConversationSpeaker { other, user }
 
 enum FinalizedUtteranceSource { speech, manual }
 
-enum ConversationMatcherKind { local, semantic, none }
+enum ConversationMatcherKind { local, contextual, semantic, none }
 
 enum CueUpdateAction {
   updated,
@@ -161,6 +161,31 @@ class ConversationSuggestionResult {
   final String? reelIntentId;
   final int excludedAlreadyShown;
   final bool moreGeneration;
+
+  ConversationSuggestionResult copyWith({
+    String? transcript,
+    ConversationInterpretation? interpretation,
+    List<ConversationSuggestion>? suggestions,
+    bool? usedSafeFallback,
+    bool? lowRecognitionConfidence,
+    int? candidateCount,
+    String? reelIntentId,
+    int? excludedAlreadyShown,
+    bool? moreGeneration,
+  }) =>
+      ConversationSuggestionResult(
+        transcript: transcript ?? this.transcript,
+        interpretation: interpretation ?? this.interpretation,
+        suggestions: suggestions ?? this.suggestions,
+        usedSafeFallback: usedSafeFallback ?? this.usedSafeFallback,
+        lowRecognitionConfidence:
+            lowRecognitionConfidence ?? this.lowRecognitionConfidence,
+        candidateCount: candidateCount ?? this.candidateCount,
+        reelIntentId: reelIntentId ?? this.reelIntentId,
+        excludedAlreadyShown:
+            excludedAlreadyShown ?? this.excludedAlreadyShown,
+        moreGeneration: moreGeneration ?? this.moreGeneration,
+      );
 }
 
 class ConversationTurn {
@@ -171,6 +196,7 @@ class ConversationTurn {
     this.id,
     this.speaker = ConversationSpeaker.other,
     this.detectedIntent,
+    this.detectedTopics = const <String>{},
     this.confidence,
   });
 
@@ -180,6 +206,7 @@ class ConversationTurn {
   final DateTime createdAt;
   final ConversationSpeaker speaker;
   final String? detectedIntent;
+  final Set<String> detectedTopics;
   final double? confidence;
 }
 

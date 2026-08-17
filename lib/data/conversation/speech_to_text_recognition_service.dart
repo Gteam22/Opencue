@@ -23,7 +23,7 @@ class SpeechToTextRecognitionService
   Future<bool> initialize(ConversationRecognitionCallbacks callbacks) async {
     _callbacks = callbacks;
     _available = await _speech.initialize(
-      finalTimeout: const Duration(milliseconds: 900),
+      finalTimeout: const Duration(milliseconds: 700),
       options: <SpeechConfigOption>[SpeechToText.androidNoBluetooth],
       onStatus: callbacks.onStatus,
       onError: _onError,
@@ -40,12 +40,15 @@ class SpeechToTextRecognitionService
       onResult: _onResult,
       onSoundLevelChange: _callbacks!.onSoundLevel,
       localeId: await _localeFor(language),
-      listenFor: const Duration(seconds: 27),
-      pauseFor: const Duration(milliseconds: 3400),
+      // OpenCue restarts the platform recognizer whenever its operating-system
+      // window closes. Keeping it alive for a longer window avoids the former
+      // tap-and-record feel while still respecting platform limits.
+      listenFor: const Duration(seconds: 55),
+      pauseFor: const Duration(milliseconds: 800),
       partialResults: true,
       cancelOnError: true,
       onDevice: true,
-      listenMode: ListenMode.confirmation,
+      listenMode: ListenMode.dictation,
     );
   }
 

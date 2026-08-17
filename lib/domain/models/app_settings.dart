@@ -18,6 +18,7 @@ class AppSettings {
     this.radialHapticsEnabled = true,
     this.radialTutorialSeen = false,
     this.conversationAssistAdultContentEnabled = false,
+    this.conversationAssistAutoSpeakEnabled = false,
     this.conversationLibraryVersion = 0,
   });
 
@@ -76,6 +77,10 @@ class AppSettings {
   /// Off by default and kept separate from the manual library's visibility.
   final bool conversationAssistAdultContentEnabled;
 
+  /// Automatically reads the primary Listen Mode reply. Off by default and
+  /// persisted independently from the per-language TTS availability toggles.
+  final bool conversationAssistAutoSpeakEnabled;
+
   /// Internal content-migration marker. Not exposed as a preference.
   final int conversationLibraryVersion;
 
@@ -96,6 +101,7 @@ class AppSettings {
     bool? radialHapticsEnabled,
     bool? radialTutorialSeen,
     bool? conversationAssistAdultContentEnabled,
+    bool? conversationAssistAutoSpeakEnabled,
     int? conversationLibraryVersion,
   }) {
     return AppSettings(
@@ -120,6 +126,9 @@ class AppSettings {
       conversationAssistAdultContentEnabled:
           conversationAssistAdultContentEnabled ??
               this.conversationAssistAdultContentEnabled,
+      conversationAssistAutoSpeakEnabled:
+          conversationAssistAutoSpeakEnabled ??
+              this.conversationAssistAutoSpeakEnabled,
       conversationLibraryVersion:
           conversationLibraryVersion ?? this.conversationLibraryVersion,
     );
@@ -141,6 +150,8 @@ class AppSettings {
         'radialTutorialSeen': radialTutorialSeen,
         'conversationAssistAdultContentEnabled':
             conversationAssistAdultContentEnabled,
+        'conversationAssistAutoSpeakEnabled':
+            conversationAssistAutoSpeakEnabled,
         'conversationLibraryVersion': conversationLibraryVersion,
       };
 
@@ -181,6 +192,8 @@ class AppSettings {
       radialTutorialSeen: json['radialTutorialSeen'] == true,
       conversationAssistAdultContentEnabled:
           json['conversationAssistAdultContentEnabled'] == true,
+      conversationAssistAutoSpeakEnabled:
+          json['conversationAssistAutoSpeakEnabled'] == true,
       conversationLibraryVersion:
           _nonNegativeInt(json['conversationLibraryVersion']),
     );
@@ -204,6 +217,8 @@ class AppSettings {
         'radialTutorialSeen': radialTutorialSeen ? 'true' : 'false',
         'conversationAssistAdultContentEnabled':
             conversationAssistAdultContentEnabled ? 'true' : 'false',
+        'conversationAssistAutoSpeakEnabled':
+            conversationAssistAutoSpeakEnabled ? 'true' : 'false',
         'conversationLibraryVersion': '$conversationLibraryVersion',
       };
 
@@ -241,6 +256,8 @@ class AppSettings {
       radialTutorialSeen: map['radialTutorialSeen'] == 'true',
       conversationAssistAdultContentEnabled:
           map['conversationAssistAdultContentEnabled'] == 'true',
+      conversationAssistAutoSpeakEnabled:
+          map['conversationAssistAutoSpeakEnabled'] == 'true',
       conversationLibraryVersion:
           _nonNegativeInt(map['conversationLibraryVersion']),
     );
@@ -259,7 +276,9 @@ class AppSettings {
       other.developerMode == developerMode &&
       other.retainScanImages == retainScanImages &&
       other.conversationAssistAdultContentEnabled ==
-          conversationAssistAdultContentEnabled;
+          conversationAssistAdultContentEnabled &&
+      other.conversationAssistAutoSpeakEnabled ==
+          conversationAssistAutoSpeakEnabled;
 
   @override
   int get hashCode => Object.hash(
@@ -270,6 +289,7 @@ class AppSettings {
         developerMode,
         retainScanImages,
         conversationAssistAdultContentEnabled,
+        conversationAssistAutoSpeakEnabled,
       );
 }
 

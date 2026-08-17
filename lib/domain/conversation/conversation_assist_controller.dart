@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../enums/enums.dart';
 import '../models/opener_line.dart';
+import '../speech/speech_controller.dart';
 import '../speech/tts_text_sanitizer.dart';
 import 'conversation_models.dart';
 import 'conversation_recognition_service.dart';
@@ -15,8 +17,10 @@ import 'voice_activity_tracker.dart';
 enum ConversationAssistPhase {
   idle,
   initializing,
-  listening,
+  waitingForSpeech,
+  hearingSpeech,
   understanding,
+  speaking,
   suggestions,
   noSpeech,
   unavailable,
@@ -60,20 +64,34 @@ class ConversationAssistController extends ChangeNotifier {
   final Map<String, SuggestionFeedbackKind> _latestFeedback =
       <String, SuggestionFeedbackKind>{};
   Timer? _vadTimer;
+  Timer? _restartTimer;
   bool _initialized = false;
   bool _finalizing = false;
+  bool _listenModeActive = false;
+  bool _recognizerActive = false;
+  bool _deliberateRecognizerStop = false;
+  bool _suppressRecognition = false;
   double? _sourceConfidence;
   bool _closed = false;
-  DateTime? _listeningStartedAt;
   ConversationPipelineDiagnostics? _diagnostics;
   String? _lastFinalizedNormalized;
   DateTime? _lastFinalizedAt;
   String? _activeCueTranscript;
   String? _activeIntentId;
   final Set<String> _shownResponseIds = <String>{};
+  ConversationSuggestionResult? _pendingVariantResult;
+  int? _pendingVariantTurnId;
   int _cueRevision = 0;
+  int _turnSequence = 0;
+  int _activeTurnId = 0;
+  SpeechController? _speechController;
+  String? _observedSpeakingLineId;
+  bool _autoSpeak = false;
+  LanguageMode _outputLanguageMode = LanguageMode.bilingual;
+  double _speechRate = 0.5;
+  bool _japaneseTtsEnabled = true;
+  bool _koreanTtsEnabled = true;
 
-  static const Duration noSpeechTimeout = Duration(seconds: 10);
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
 
@@ -90,7 +108,11 @@ class ConversationAssistController extends ChangeNotifier {
   int get cueRevision => _cueRevision;
   String? get activeIntentId => _activeIntentId;
   Set<String> get shownResponseIds => Set.unmodifiable(_shownResponseIds);
-  bool get isListening => _phase == ConversationAssistPhase.listening;
+  bool get isListening => _listenModeActive;
+  bool get listenModeActive => _listenModeActive;
+  bool get recognitionSuppressed => _suppressRecognition;
+  bool get autoSpeak => _autoSpeak;
+  int get activeTurnId => _activeTurnId;
 
   Future<void> prepare() async {
     if (_initialized) return;
@@ -116,46 +138,130 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> start({
     required List<OpenerLine> library,
     required ConversationPreferences preferences,
+    SpeechController? speechController,
+    bool autoSpeak = false,
+    LanguageMode outputLanguageMode = LanguageMode.bilingual,
+    double speechRate = 0.5,
+    bool japaneseTtsEnabled = true,
+    bool koreanTtsEnabled = true,
   }) async {
     if (!_initialized) await prepare();
     if (!_initialized) return;
     _library = library;
     this.preferences = preferences;
+    configureAudio(
+      speechController: speechController,
+      autoSpeak: autoSpeak,
+      outputLanguageMode: outputLanguageMode,
+      speechRate: speechRate,
+      japaneseTtsEnabled: japaneseTtsEnabled,
+      koreanTtsEnabled: koreanTtsEnabled,
+    );
     _transcript = '';
     _confidence = 0;
     _errorMessage = null;
     _finalizing = false;
-    voiceActivity.reset();
-    _listeningStartedAt = DateTime.now();
-    _setPhase(ConversationAssistPhase.listening);
-    try {
-      await _recognition.start(language: inputLanguage);
-      _vadTimer?.cancel();
-      _vadTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-        final now = DateTime.now();
-        final noSpeechTimedOut = !voiceActivity.heardSpeech &&
-            _listeningStartedAt != null &&
-            now.difference(_listeningStartedAt!) >= noSpeechTimeout;
-        if (isListening &&
-            (voiceActivity.shouldStop(now) || noSpeechTimedOut)) {
-          unawaited(stop());
-        }
-      });
-    } on Object catch (error) {
-      _errorMessage = '$error';
-      _setPhase(ConversationAssistPhase.error);
-    }
+    _listenModeActive = true;
+    _startVadTimer();
+    await _startRecognitionCycle();
   }
 
+  /// Turns persistent Listen Mode off. A transcript already in progress is
+  /// finalized once; otherwise the recognizer is simply released.
   Future<void> stop() async {
-    if (!isListening || _finalizing) return;
-    await _finalizeTranscript();
+    if (!_listenModeActive) return;
+    _listenModeActive = false;
+    _vadTimer?.cancel();
+    _restartTimer?.cancel();
+    final pending = _transcript.trim();
+    _deliberateRecognizerStop = true;
+    _recognizerActive = false;
+    try {
+      await _recognition.stop();
+    } finally {
+      _deliberateRecognizerStop = false;
+    }
+    if (_speechController?.speakingLineId != null) {
+      await _speechController!.stop();
+    }
+    _suppressRecognition = false;
+    if (pending.isNotEmpty && !_finalizing) {
+      await onUtteranceFinalized(
+        pending,
+        library: _library,
+        preferences: preferences,
+        source: FinalizedUtteranceSource.speech,
+        transcriptionConfidence: _confidence,
+      );
+    }
+    _setPhase(_result == null
+        ? ConversationAssistPhase.idle
+        : ConversationAssistPhase.suggestions);
   }
 
   Future<void> cancel() async {
+    _listenModeActive = false;
     _vadTimer?.cancel();
+    _restartTimer?.cancel();
+    _activeTurnId = ++_turnSequence;
+    _deliberateRecognizerStop = true;
+    _recognizerActive = false;
     await _recognition.cancel();
+    await _speechController?.stop();
+    _deliberateRecognizerStop = false;
+    _suppressRecognition = false;
     _setPhase(ConversationAssistPhase.idle);
+  }
+
+  void configureAudio({
+    SpeechController? speechController,
+    required bool autoSpeak,
+    required LanguageMode outputLanguageMode,
+    required double speechRate,
+    required bool japaneseTtsEnabled,
+    required bool koreanTtsEnabled,
+  }) {
+    if (!identical(_speechController, speechController)) {
+      _speechController?.removeListener(_onSpeechStateChanged);
+      _speechController = speechController;
+      _speechController?.addListener(_onSpeechStateChanged);
+    }
+    _autoSpeak = autoSpeak;
+    _outputLanguageMode = outputLanguageMode;
+    _speechRate = speechRate;
+    _japaneseTtsEnabled = japaneseTtsEnabled;
+    _koreanTtsEnabled = koreanTtsEnabled;
+  }
+
+  void setAutoSpeak(bool value) {
+    if (_autoSpeak == value) return;
+    _autoSpeak = value;
+    notifyListeners();
+  }
+
+  /// Runs a confirmed edit through the exact same finalized-turn pipeline.
+  /// Persistent listening is briefly paused so recognition cannot race the
+  /// manual correction, then resumes automatically.
+  Future<bool> submitManualTranscript(
+    String text, {
+    required List<OpenerLine> library,
+    required ConversationPreferences preferences,
+  }) async {
+    final shouldResume = _listenModeActive;
+    if (shouldResume) {
+      _deliberateRecognizerStop = true;
+      _recognizerActive = false;
+      await _recognition.cancel();
+      _deliberateRecognizerStop = false;
+    }
+    final updated = await onUtteranceFinalized(
+      text,
+      library: library,
+      preferences: preferences,
+      source: FinalizedUtteranceSource.manual,
+    );
+    if (shouldResume && _listenModeActive) _scheduleRecognitionRestart();
+    return updated;
   }
 
   void setInputLanguage(ConversationInputLanguage value) {
@@ -178,6 +284,10 @@ class ConversationAssistController extends ChangeNotifier {
     FinalizedUtteranceSource source = FinalizedUtteranceSource.manual,
     double? transcriptionConfidence,
   }) async {
+    final turnId = ++_turnSequence;
+    _activeTurnId = turnId;
+    _pendingVariantResult = null;
+    _pendingVariantTurnId = null;
     final trimmed = text.trim();
     final normalized = normalizer.normalize(trimmed);
     final now = DateTime.now().toUtc();
@@ -274,6 +384,25 @@ class ConversationAssistController extends ChangeNotifier {
         ? ConversationMatcherKind.none
         : ConversationMatcherKind.local;
     var relevant = _isRelevant(nextResult);
+    if (!relevant && _looksLikeContextualFollowUp(normalized)) {
+      final prior = _mostRecentIncomingIntent();
+      if (prior != null) {
+        final contextualResult = responseEngine.suggest(
+          transcript: trimmed,
+          library: library,
+          preferences: withRecent,
+          history: _history,
+          transcriptionConfidence: transcriptionConfidence,
+          semanticIntentId: prior.$1,
+          semanticConfidence: prior.$2,
+        );
+        if (_isRelevant(contextualResult)) {
+          nextResult = contextualResult;
+          relevant = true;
+          matcher = ConversationMatcherKind.contextual;
+        }
+      }
+    }
     if (!relevant) {
       SemanticIntentClassification? semantic;
       try {
@@ -284,6 +413,7 @@ class ConversationAssistController extends ChangeNotifier {
       } on Object catch (error) {
         _errorMessage = 'Semantic classifier: $error';
       }
+      if (!_isCurrentTurn(turnId)) return false;
       if (semantic != null &&
           semantic.confidence >= semanticFallbackThreshold) {
         final semanticResult = responseEngine.suggest(
@@ -302,6 +432,7 @@ class ConversationAssistController extends ChangeNotifier {
         }
       }
     }
+    if (!_isCurrentTurn(turnId)) return false;
 
     final intentId = relevant
         ? nextResult.interpretation.primaryIntentId!
@@ -310,19 +441,37 @@ class ConversationAssistController extends ChangeNotifier {
       transcript: trimmed,
       language: nextResult.interpretation.language,
       intentId: relevant ? intentId : null,
+      topics: <String>{
+        ...nextResult.interpretation.topics.map((topic) => topic.name),
+        if (relevant) intentId,
+      },
       confidence: nextResult.interpretation.intentConfidence,
       createdAt: now,
     );
     if (relevant) {
-      _result = nextResult;
+      final stageVariants = source == FinalizedUtteranceSource.speech &&
+          _listenModeActive &&
+          nextResult.suggestions.length > 1;
+      final displayedResult = stageVariants
+          ? nextResult.copyWith(
+              suggestions: <ConversationSuggestion>[
+                nextResult.suggestions.first,
+              ],
+            )
+          : nextResult;
+      _result = displayedResult;
+      if (stageVariants) {
+        _pendingVariantResult = nextResult;
+        _pendingVariantTurnId = turnId;
+      }
       _activeCueTranscript = trimmed;
       _activeIntentId = intentId;
       _sourceConfidence = transcriptionConfidence;
       _shownResponseIds
         ..clear()
-        ..addAll(nextResult.suggestions.map((item) => item.line.id));
+        ..addAll(displayedResult.suggestions.map((item) => item.line.id));
       _cueRevision++;
-      final ids = nextResult.suggestions.map((item) => item.line.id);
+      final ids = displayedResult.suggestions.map((item) => item.line.id);
       _remember(ids);
       for (final id in ids) {
         _recordFeedback(id, SuggestionFeedbackKind.shown);
@@ -415,7 +564,15 @@ class ConversationAssistController extends ChangeNotifier {
       displayTexts: _displayTexts(next),
       ttsTexts: _ttsTexts(next),
     );
-    _setPhase(ConversationAssistPhase.suggestions);
+    if (_listenModeActive) {
+      _setPhase(_suppressRecognition
+          ? ConversationAssistPhase.speaking
+          : (voiceActivity.heardSpeech
+              ? ConversationAssistPhase.hearingSpeech
+              : ConversationAssistPhase.waitingForSpeech));
+    } else {
+      _setPhase(ConversationAssistPhase.suggestions);
+    }
   }
 
   Map<String, String> _slotLineIds(ConversationSuggestionResult result) =>
@@ -469,6 +626,8 @@ class ConversationAssistController extends ChangeNotifier {
     required String? intentId,
     required double confidence,
     required DateTime createdAt,
+    ConversationSpeaker speaker = ConversationSpeaker.other,
+    Set<String> topics = const <String>{},
   }) {
     _history.insert(
       0,
@@ -477,11 +636,13 @@ class ConversationAssistController extends ChangeNotifier {
         transcript: transcript,
         language: language,
         createdAt: createdAt,
+        speaker: speaker,
         detectedIntent: intentId,
+        detectedTopics: topics,
         confidence: confidence,
       ),
     );
-    if (_history.length > 6) _history.removeRange(6, _history.length);
+    if (_history.length > 12) _history.removeRange(12, _history.length);
   }
 
   SuggestionFeedbackKind? feedbackFor(String lineId) =>
@@ -490,6 +651,7 @@ class ConversationAssistController extends ChangeNotifier {
   void acceptSuggestion(String lineId) {
     if (_latestFeedback[lineId] == SuggestionFeedbackKind.accepted) return;
     _recordFeedback(lineId, SuggestionFeedbackKind.accepted);
+    _recordSpokenOrSelectedResponse(lineId);
     notifyListeners();
   }
 
@@ -513,61 +675,371 @@ class ConversationAssistController extends ChangeNotifier {
     while (_feedback.length > 60) _feedback.removeAt(0);
   }
 
-  Future<void> _finalizeTranscript() async {
-    if (_finalizing) return;
-    _finalizing = true;
+  bool _isCurrentTurn(int turnId) =>
+      !_closed && turnId == _activeTurnId;
+
+  (String, double)? _mostRecentIncomingIntent() {
+    for (final turn in _history) {
+      if (turn.speaker != ConversationSpeaker.other ||
+          turn.detectedIntent == null ||
+          turn.detectedIntent == 'no_action') {
+        continue;
+      }
+      final confidence = ((turn.confidence ?? 0.75) * 0.92)
+          .clamp(0.68, 0.92)
+          .toDouble();
+      return (turn.detectedIntent!, confidence);
+    }
+    return null;
+  }
+
+  bool _looksLikeContextualFollowUp(String normalized) {
+    if (normalized.runes.length > 26) return false;
+    return const <String>[
+      '何年',
+      'どのくらい',
+      'どれくらい',
+      'それで',
+      'じゃあ',
+      '本当',
+      '具体的には',
+      '왜',
+      '얼마나',
+      '몇년',
+      '그래서',
+      '그럼',
+      '정말',
+      'howlong',
+      'howmany',
+      'why',
+      'really',
+      'andyou',
+      'whataboutyou',
+    ].any(normalized.contains);
+  }
+
+  void _recordSpokenOrSelectedResponse(
+    String lineId, {
+    String? languageCode,
+  }) {
+    OpenerLine? line;
+    for (final suggestion in _result?.suggestions ??
+        const <ConversationSuggestion>[]) {
+      if (suggestion.line.id == lineId) {
+        line = suggestion.line;
+        break;
+      }
+    }
+    if (line == null) {
+      for (final candidate in _library) {
+        if (candidate.id == lineId) {
+          line = candidate;
+          break;
+        }
+      }
+    }
+    if (line == null) return;
+    final korean = line.koreanText;
+    final useKorean = languageCode == SpeechController.koreanLocale ||
+        (languageCode == null &&
+            _outputLanguageMode == LanguageMode.korean);
+    final transcript = useKorean &&
+            korean != null &&
+            korean.trim().isNotEmpty
+        ? korean
+        : line.japaneseText;
+    _recordTurn(
+      transcript: transcript,
+      language: languageDetector.detect(transcript),
+      intentId: _activeIntentId,
+      topics: line.topics,
+      confidence: 1,
+      createdAt: DateTime.now().toUtc(),
+      speaker: ConversationSpeaker.user,
+    );
+  }
+
+  void _startVadTimer() {
     _vadTimer?.cancel();
+    _vadTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!_listenModeActive ||
+          !_recognizerActive ||
+          _suppressRecognition ||
+          _finalizing) {
+        return;
+      }
+      final now = DateTime.now();
+      if (voiceActivity.heardSpeech &&
+          _phase == ConversationAssistPhase.waitingForSpeech) {
+        _setPhase(ConversationAssistPhase.hearingSpeech);
+      }
+      if (voiceActivity.shouldStop(now)) {
+        unawaited(_finalizeTranscript());
+      }
+    });
+  }
+
+  Future<void> _startRecognitionCycle() async {
+    if (!_listenModeActive ||
+        _closed ||
+        _recognizerActive ||
+        _finalizing ||
+        _suppressRecognition) {
+      return;
+    }
+    if (_speechController?.speakingLineId != null) {
+      _suppressRecognition = true;
+      _setPhase(ConversationAssistPhase.speaking);
+      return;
+    }
+    voiceActivity.reset();
+    _transcript = '';
+    _confidence = 0;
+    _recognizerActive = true;
+    _setPhase(ConversationAssistPhase.waitingForSpeech);
     try {
-      await _recognition.stop();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      await onUtteranceFinalized(
-        _transcript,
-        library: _library,
-        preferences: preferences,
-        source: FinalizedUtteranceSource.speech,
-        transcriptionConfidence: _confidence,
-      );
+      await _recognition.start(language: inputLanguage);
     } on Object catch (error) {
+      _recognizerActive = false;
+      _listenModeActive = false;
       _errorMessage = '$error';
       _setPhase(ConversationAssistPhase.error);
+    }
+  }
+
+  void _scheduleRecognitionRestart() {
+    if (!_listenModeActive || _suppressRecognition || _closed) return;
+    _restartTimer?.cancel();
+    _restartTimer = Timer(const Duration(milliseconds: 120), () {
+      unawaited(_startRecognitionCycle());
+    });
+  }
+
+  Future<void> _finalizeTranscript() async {
+    if (_finalizing || !_listenModeActive || _suppressRecognition) return;
+    _finalizing = true;
+    final finalizedText = _transcript.trim();
+    final finalizedConfidence = _confidence;
+    _recognizerActive = false;
+    _deliberateRecognizerStop = true;
+    try {
+      await _recognition.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (finalizedText.isNotEmpty) {
+        final finalizedTurnId = _turnSequence + 1;
+        final relevant = await onUtteranceFinalized(
+          finalizedText,
+          library: _library,
+          preferences: preferences,
+          source: FinalizedUtteranceSource.speech,
+          transcriptionConfidence: finalizedConfidence,
+        );
+        if (!_isCurrentTurn(finalizedTurnId)) return;
+        if (relevant &&
+            _autoSpeak &&
+            _listenModeActive &&
+            _isCurrentTurn(finalizedTurnId)) {
+          final speaking = _speakPrimarySuggestion(finalizedTurnId);
+          await Future<void>.delayed(Duration.zero);
+          _publishPendingVariants(finalizedTurnId);
+          await speaking;
+        } else {
+          await Future<void>.delayed(Duration.zero);
+          _publishPendingVariants(finalizedTurnId);
+        }
+      }
+    } on Object catch (error) {
+      _errorMessage = '$error';
+      if (_listenModeActive) _setPhase(ConversationAssistPhase.error);
     } finally {
+      _deliberateRecognizerStop = false;
       _finalizing = false;
+      if (_listenModeActive && !_suppressRecognition) {
+        _scheduleRecognitionRestart();
+      }
     }
   }
 
   void _onRecognitionResult(String text, bool isFinal, double confidence) {
+    if (!_listenModeActive ||
+        !_recognizerActive ||
+        _suppressRecognition ||
+        _deliberateRecognizerStop) {
+      return;
+    }
     if (text.trim().isNotEmpty) _transcript = text.trim();
     _confidence = confidence;
-    notifyListeners();
+    if (_transcript.isNotEmpty &&
+        _phase == ConversationAssistPhase.waitingForSpeech) {
+      _setPhase(ConversationAssistPhase.hearingSpeech);
+    } else {
+      notifyListeners();
+    }
     if (isFinal && isListening) unawaited(_finalizeTranscript());
   }
 
   void _onSoundLevel(double level) {
+    if (!_listenModeActive || !_recognizerActive || _suppressRecognition) {
+      return;
+    }
     _soundLevel = level;
     voiceActivity.addLevel(level, DateTime.now());
+    if (voiceActivity.heardSpeech &&
+        _phase == ConversationAssistPhase.waitingForSpeech) {
+      _setPhase(ConversationAssistPhase.hearingSpeech);
+      return;
+    }
     notifyListeners();
   }
 
   void _onStatus(String status) {
-    if ((status == 'done' || status == 'notListening') && isListening) {
-      unawaited(_finalizeTranscript());
+    if (_deliberateRecognizerStop || _suppressRecognition) return;
+    if ((status == 'done' || status == 'notListening') &&
+        _listenModeActive) {
+      _recognizerActive = false;
+      if (_transcript.trim().isNotEmpty || voiceActivity.heardSpeech) {
+        _recognizerActive = true;
+        unawaited(_finalizeTranscript());
+      } else {
+        _scheduleRecognitionRestart();
+      }
     }
   }
 
   void _onRecognitionError(String message, {required bool permanent}) {
-    _vadTimer?.cancel();
     _errorMessage = message;
     final normalized = message.toLowerCase();
     if (normalized.contains('no_match') ||
         normalized.contains('speech_timeout')) {
-      _setPhase(ConversationAssistPhase.noSpeech);
+      _recognizerActive = false;
+      if (_listenModeActive) _scheduleRecognitionRestart();
       return;
     }
     final permission = normalized.contains('permission') ||
         normalized.contains('notallowed');
+    if (!permanent && !permission && _listenModeActive) {
+      _recognizerActive = false;
+      _scheduleRecognitionRestart();
+      return;
+    }
+    _listenModeActive = false;
+    _recognizerActive = false;
+    _vadTimer?.cancel();
     _setPhase(permission
         ? ConversationAssistPhase.permissionDenied
         : ConversationAssistPhase.error);
+  }
+
+  Future<void> _speakPrimarySuggestion(int turnId) async {
+    final speech = _speechController;
+    final suggestions = _result?.suggestions;
+    if (speech == null ||
+        !speech.isSupported ||
+        suggestions == null ||
+        suggestions.isEmpty ||
+        !_isCurrentTurn(turnId)) {
+      return;
+    }
+    final line = suggestions.first.line;
+    _suppressRecognition = true;
+    _recognizerActive = false;
+    _setPhase(ConversationAssistPhase.speaking);
+    try {
+      await _recognition.cancel();
+      if (_outputLanguageMode == LanguageMode.korean) {
+        if (_koreanTtsEnabled &&
+            line.ttsKorean &&
+            line.koreanText?.trim().isNotEmpty == true &&
+            await speech.ensureKoreanChecked()) {
+          await speech.toggleKorean(
+            lineId: line.id,
+            koreanText: line.koreanText!,
+            rate: _speechRate,
+          );
+        }
+      } else if (_japaneseTtsEnabled &&
+          line.ttsJapanese &&
+          await speech.ensureJapaneseChecked()) {
+        await speech.toggleJapanese(
+          lineId: line.id,
+          japaneseText: line.japaneseText,
+          rate: _speechRate,
+        );
+      }
+    } finally {
+      _suppressRecognition = false;
+      voiceActivity.reset();
+    }
+  }
+
+  void _publishPendingVariants(int turnId) {
+    final full = _pendingVariantResult;
+    if (full == null ||
+        _pendingVariantTurnId != turnId ||
+        !_isCurrentTurn(turnId)) {
+      return;
+    }
+    final previousIds = _result?.suggestions
+            .map((item) => item.line.id)
+            .toSet() ??
+        const <String>{};
+    _pendingVariantResult = null;
+    _pendingVariantTurnId = null;
+    _result = full;
+    final newlyVisible = full.suggestions
+        .map((item) => item.line.id)
+        .where((id) => !previousIds.contains(id));
+    _shownResponseIds.addAll(newlyVisible);
+    _remember(newlyVisible);
+    for (final id in newlyVisible) {
+      _recordFeedback(id, SuggestionFeedbackKind.shown);
+    }
+    _diagnostics = _diagnostics?.copyWith(
+      responsesDisplayed: full.suggestions.length,
+      displayTexts: _displayTexts(full),
+      ttsTexts: _ttsTexts(full),
+      reelSlotLineIds: _slotLineIds(full),
+    );
+    notifyListeners();
+  }
+
+  void _onSpeechStateChanged() {
+    final lineId = _speechController?.speakingLineId;
+    if (lineId != null) {
+      if (_observedSpeakingLineId != lineId) {
+        _observedSpeakingLineId = lineId;
+        _recordSpokenOrSelectedResponse(
+          lineId,
+          languageCode: _speechController?.speakingLanguageCode,
+        );
+      }
+      if (_listenModeActive) {
+        _setPhase(ConversationAssistPhase.speaking);
+        if (!_suppressRecognition) {
+          _suppressRecognition = true;
+          unawaited(_pauseRecognitionForSpeech());
+        }
+      }
+      return;
+    }
+    if (_observedSpeakingLineId != null) {
+      _observedSpeakingLineId = null;
+      if (_listenModeActive && _suppressRecognition && !_finalizing) {
+        _suppressRecognition = false;
+        voiceActivity.reset();
+        _scheduleRecognitionRestart();
+      }
+    }
+  }
+
+  Future<void> _pauseRecognitionForSpeech() async {
+    _deliberateRecognizerStop = true;
+    _recognizerActive = false;
+    try {
+      await _recognition.cancel();
+    } finally {
+      _deliberateRecognizerStop = false;
+    }
   }
 
   void _remember(Iterable<String> ids) {
@@ -586,6 +1058,8 @@ class ConversationAssistController extends ChangeNotifier {
   @override
   void dispose() {
     _vadTimer?.cancel();
+    _restartTimer?.cancel();
+    _speechController?.removeListener(_onSpeechStateChanged);
     unawaited(close());
     super.dispose();
   }
@@ -594,6 +1068,8 @@ class ConversationAssistController extends ChangeNotifier {
     if (_closed) return;
     _closed = true;
     _vadTimer?.cancel();
+    _restartTimer?.cancel();
+    _speechController?.removeListener(_onSpeechStateChanged);
     await _recognition.dispose();
   }
 }

@@ -9,6 +9,13 @@ file to mention the current version.
 
 ### Added
 
+- **Persistent Conversation Assist Listen Mode.** One Start/Stop toggle now
+  drives an automatic waiting → speech → finalized turn → response → optional
+  TTS → waiting loop. It includes adaptive ambient-noise VAD, streaming partial
+  transcripts, 700 ms end-of-turn silence, turn IDs that reject stale results,
+  rolling incoming/selected-response context, persisted Auto Speak, and
+  recognition suppression during TTS to prevent feedback loops. The primary
+  response is published before the same-intent reel variants.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or
   correcting a situation with one thumb. Hold the trigger and drag to select in
   one continuous gesture, or tap to pin the menu open and browse it. Eight root

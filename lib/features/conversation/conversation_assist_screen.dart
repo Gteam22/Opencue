@@ -9,6 +9,7 @@ import '../../domain/enums/enums.dart';
 import '../../domain/models/opener_line.dart';
 import '../library/line_detail_screen.dart';
 import '../shared/app_scope.dart';
+import '../shared/korean_speak_button.dart';
 import '../shared/widgets.dart';
 
 class ConversationAssistScreen extends StatefulWidget {
@@ -71,18 +72,27 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
   Future<void> _listen() async {
     final state = AppScope.read(context);
     FocusScope.of(context).unfocus();
+    if (_controller.listenModeActive) {
+      await _controller.stop();
+      return;
+    }
     await _controller.start(
       library: state.lines,
       preferences: _preferences,
+      speechController: state.speech,
+      autoSpeak: state.settings.conversationAssistAutoSpeakEnabled,
+      outputLanguageMode: state.settings.languageMode,
+      speechRate: state.settings.speechRate.rate,
+      japaneseTtsEnabled: state.settings.japaneseTtsEnabled,
+      koreanTtsEnabled: state.settings.koreanTtsEnabled,
     );
   }
 
   Future<void> _suggestEditedText() async {
-    await _controller.onUtteranceFinalized(
+    await _controller.submitManualTranscript(
       _transcript.text,
       library: AppScope.read(context).lines,
       preferences: _preferences,
-      source: FinalizedUtteranceSource.manual,
     );
     if (!mounted) return;
     FocusScope.of(context).unfocus();
@@ -109,9 +119,14 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
                 const SizedBox(height: 16),
                 _ListenPanel(
                   controller: _controller,
-                  onListen: _listen,
-                  onStop: _controller.stop,
-                  onRetry: _listen,
+                  onToggle: _listen,
+                ),
+                _AutoSpeakControl(
+                  value: AppScope.of(context)
+                      .settings
+                      .conversationAssistAutoSpeakEnabled,
+                  enabled: AppScope.speech(context).isSupported,
+                  onChanged: _setAutoSpeak,
                 ),
                 const SizedBox(height: AppTheme.gap),
                 _InputLanguageControl(controller: _controller),
@@ -185,6 +200,16 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
     _controller.setPreferences(value);
   }
 
+  Future<void> _setAutoSpeak(bool enabled) async {
+    _controller.setAutoSpeak(enabled);
+    final state = AppScope.read(context);
+    await state.updateSettings(
+      state.settings.copyWith(
+        conversationAssistAutoSpeakEnabled: enabled,
+      ),
+    );
+  }
+
   Future<void> _setAdultContent(bool enabled) async {
     if (enabled) {
       final accepted = await showDialog<bool>(
@@ -244,15 +269,11 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
 class _ListenPanel extends StatelessWidget {
   const _ListenPanel({
     required this.controller,
-    required this.onListen,
-    required this.onStop,
-    required this.onRetry,
+    required this.onToggle,
   });
 
   final ConversationAssistController controller;
-  final Future<void> Function() onListen;
-  final Future<void> Function() onStop;
-  final Future<void> Function() onRetry;
+  final Future<void> Function() onToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -263,9 +284,13 @@ class _ListenPanel extends StatelessWidget {
     final status = switch (phase) {
       ConversationAssistPhase.idle => strings.t('assist.ready'),
       ConversationAssistPhase.initializing => strings.t('assist.initializing'),
-      ConversationAssistPhase.listening => strings.t('assist.listening'),
+      ConversationAssistPhase.waitingForSpeech =>
+        strings.t('assist.waitingForSpeech'),
+      ConversationAssistPhase.hearingSpeech =>
+        strings.t('assist.hearingSpeech'),
       ConversationAssistPhase.understanding =>
         strings.t('assist.understanding'),
+      ConversationAssistPhase.speaking => strings.t('assist.speaking'),
       ConversationAssistPhase.suggestions => strings.t('assist.readyAgain'),
       ConversationAssistPhase.noSpeech => strings.t('assist.noSpeech'),
       ConversationAssistPhase.unavailable => strings.t('assist.unavailable'),
@@ -274,9 +299,6 @@ class _ListenPanel extends StatelessWidget {
       ConversationAssistPhase.error =>
         controller.errorMessage ?? strings.t('assist.error'),
     };
-    final retryable = phase == ConversationAssistPhase.noSpeech ||
-        phase == ConversationAssistPhase.error;
-
     return Card(
       color: listening ? theme.colorScheme.primaryContainer : null,
       child: Padding(
@@ -290,7 +312,7 @@ class _ListenPanel extends StatelessWidget {
                 key: const Key('assist-listen'),
                 onPressed: phase == ConversationAssistPhase.initializing
                     ? null
-                    : (listening ? onStop : (retryable ? onRetry : onListen)),
+                    : onToggle,
                 style: FilledButton.styleFrom(
                   shape: const CircleBorder(),
                   padding: EdgeInsets.zero,
@@ -298,7 +320,7 @@ class _ListenPanel extends StatelessWidget {
                 child: Icon(
                   listening
                       ? Icons.stop_rounded
-                      : (retryable ? Icons.refresh : Icons.mic_rounded),
+                      : Icons.mic_rounded,
                   size: 30,
                 ),
               ),
@@ -310,14 +332,16 @@ class _ListenPanel extends StatelessWidget {
                 children: <Widget>[
                   Text(
                     listening
-                        ? strings.t('assist.stop')
-                        : strings.t('assist.listen'),
+                        ? strings.t('assist.stopListening')
+                        : strings.t('assist.startListening'),
                     style: theme.textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 3),
                   Text(status),
-                  if (listening) ...<Widget>[
+                  if (phase == ConversationAssistPhase.hearingSpeech ||
+                      phase == ConversationAssistPhase.understanding ||
+                      phase == ConversationAssistPhase.speaking) ...<Widget>[
                     const SizedBox(height: 8),
                     LinearProgressIndicator(
                       value: null,
@@ -332,6 +356,34 @@ class _ListenPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AutoSpeakControl extends StatelessWidget {
+  const _AutoSpeakControl({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => SwitchListTile.adaptive(
+        key: const Key('assist-auto-speak'),
+        contentPadding: EdgeInsets.zero,
+        title: Text(AppScope.strings(context).t('assist.autoSpeak')),
+        subtitle: Text(
+          AppScope.strings(context).t(
+            enabled
+                ? 'assist.autoSpeakHint'
+                : 'assist.autoSpeakUnavailable',
+          ),
+        ),
+        value: enabled && value,
+        onChanged: enabled ? onChanged : null,
+      );
 }
 
 class _InputLanguageControl extends StatelessWidget {
@@ -711,7 +763,11 @@ class _SessionHistory extends StatelessWidget {
             ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.record_voice_over_outlined),
+              leading: Icon(
+                turn.speaker == ConversationSpeaker.other
+                    ? Icons.record_voice_over_outlined
+                    : Icons.reply_rounded,
+              ),
               title: Text(turn.transcript, maxLines: 2),
               trailing: Text(
                 strings.t('assist.detected.${turn.language.name}'),
