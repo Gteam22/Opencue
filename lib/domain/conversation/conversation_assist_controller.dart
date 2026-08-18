@@ -67,6 +67,8 @@ class ConversationAssistController extends ChangeNotifier {
     VoiceActivityTracker? voiceActivityTracker,
     this.vadPollInterval = const Duration(milliseconds: 100),
     this.listenButtonDebounce = const Duration(milliseconds: 350),
+    this.postTtsAudioReleaseDelay = const Duration(milliseconds: 200),
+    this.rearmRetryDelay = const Duration(milliseconds: 250),
   })  : _recognition = recognition,
         _voiceActivity = voiceActivityTracker ?? VoiceActivityTracker();
 
@@ -82,6 +84,8 @@ class ConversationAssistController extends ChangeNotifier {
   final Duration ttsPlaybackTimeout;
   final Duration vadPollInterval;
   final Duration listenButtonDebounce;
+  final Duration postTtsAudioReleaseDelay;
+  final Duration rearmRetryDelay;
   final VoiceActivityTracker _voiceActivity;
 
   ConversationAssistPhase _phase = ConversationAssistPhase.idle;
@@ -144,6 +148,11 @@ class ConversationAssistController extends ChangeNotifier {
   bool _listenButtonTransitionLocked = false;
   DateTime? _lastListenButtonEventAt;
   int _listenButtonTransitionSequence = 0;
+  Future<void>? _rearmOperation;
+  Timer? _rearmDelayTimer;
+  Completer<void>? _rearmDelayCompleter;
+  int _rearmGeneration = 0;
+  int _consecutiveRecognitionRecoveries = 0;
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
@@ -291,6 +300,14 @@ class ConversationAssistController extends ChangeNotifier {
   }) async {
     if (!_initialized) await prepare();
     if (!_initialized) return;
+    if (_listenModeEnabled) {
+      logger.event(
+        sessionId: _activeSessionId ?? 0,
+        state: _speechState.name.toUpperCase(),
+        event: 'duplicate_start_ignored_session_already_enabled',
+      );
+      return;
+    }
     final pendingCleanup = _recognitionCleanup;
     if (pendingCleanup != null) await pendingCleanup;
     if (_closed) return;
@@ -322,13 +339,21 @@ class ConversationAssistController extends ChangeNotifier {
       return;
     }
     _listenModeEnabled = true;
-    await _beginRecognitionSession(resumedFromTurnId: null);
+    final started = await _beginRecognitionSession(resumedFromTurnId: null);
+    if (!started && _listenModeEnabled) {
+      // The explicit Start command did not establish a session. This is not an
+      // end-of-turn transition; return the failed command to OFF.
+      _listenModeEnabled = false;
+      notifyListeners();
+    }
   }
 
-  Future<void> _beginRecognitionSession({
+  Future<bool> _beginRecognitionSession({
     required int? resumedFromTurnId,
   }) async {
-    if (_closed || !_listenModeEnabled || _activeSessionId != null) return;
+    if (_closed || !_listenModeEnabled || _activeSessionId != null) {
+      return false;
+    }
     _transcript = '';
     _confidence = 0;
     _errorMessage = null;
@@ -367,7 +392,7 @@ class ConversationAssistController extends ChangeNotifier {
         sessionId: sessionId,
         language: effectiveLanguage,
       );
-      if (_activeSessionId != sessionId) return;
+      if (_activeSessionId != sessionId) return false;
       _recognitionLocale = info.localeId;
       _recognitionStrategy = info.strategy;
       logger.event(
@@ -396,16 +421,35 @@ class ConversationAssistController extends ChangeNotifier {
         );
       }
       notifyListeners();
+      return true;
     } on Object catch (error) {
-      if (_activeSessionId != sessionId) return;
+      _startupWatchdog?.cancel();
+      if (_activeSessionId != sessionId) return false;
       _activeSessionId = null;
-      _listenModeEnabled = false;
       _errorMessage = '$error';
-      _recoverFromRecognitionError(
-        sessionId,
-        event: 'start_failed',
-        phase: ConversationAssistPhase.error,
+      logger.event(
+        sessionId: sessionId,
+        state: 'ERROR',
+        event: 'recognition_start_failed',
+        details: <String, Object?>{
+          'message': error,
+          'isRearm': resumedFromTurnId != null,
+          'listenModeEnabled': _listenModeEnabled,
+        },
       );
+      _setSpeechState(
+        ConversationSpeechState.error,
+        sessionId,
+        'start_failed',
+      );
+      _setPhase(ConversationAssistPhase.error);
+      _setSpeechState(
+        ConversationSpeechState.idle,
+        sessionId,
+        'start_failure_released_audio_owner',
+        notify: false,
+      );
+      return false;
     }
   }
 
@@ -440,6 +484,7 @@ class ConversationAssistController extends ChangeNotifier {
       event: 'STOP_PRESSED',
     );
     _listenModeEnabled = false;
+    _cancelPendingRearm('stop_pressed');
     _resumingFromTurnId = null;
     _resumeRequestedAt = null;
     _startupWatchdog?.cancel();
@@ -512,6 +557,7 @@ class ConversationAssistController extends ChangeNotifier {
     _stopVadMonitoring();
     _clearProcessingWatchdog();
     _listenModeEnabled = false;
+    _cancelPendingRearm('cancel_requested');
     _resumingFromTurnId = null;
     _resumeRequestedAt = null;
     _activeTurnId = ++_turnSequence;
@@ -569,15 +615,18 @@ class ConversationAssistController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Runs a confirmed edit through the same finalized-turn pipeline. If a
-  /// microphone session is active it is cancelled and is never auto-restarted.
+  /// Runs a confirmed edit through the same finalized-turn pipeline. If Listen
+  /// Mode is enabled, only the current recognizer turn is replaced and the
+  /// persistent session is rearmed after manual processing.
   Future<bool> submitManualTranscript(
     String text, {
     required List<OpenerLine> library,
     required ConversationPreferences preferences,
   }) async {
     final sessionId = _activeSessionId;
-    _listenModeEnabled = false;
+    final pendingRearm = _rearmOperation;
+    _cancelPendingRearm('manual_transcript');
+    if (pendingRearm != null) await pendingRearm;
     _startupWatchdog?.cancel();
     if (sessionId != null) {
       _activeSessionId = null;
@@ -599,6 +648,12 @@ class ConversationAssistController extends ChangeNotifier {
       sessionId ?? 0,
       'manual_processing_complete',
     );
+    if (_listenModeEnabled) {
+      await _resumeListening(
+        _activeTurnId,
+        reason: 'manual_transcript_complete',
+      );
+    }
     return updated;
   }
 
@@ -1204,6 +1259,24 @@ class ConversationAssistController extends ChangeNotifier {
     );
     _armProcessingWatchdog(turnId, sessionId);
     final finalizedText = text.trim();
+    if (_effectiveInputLanguage(_outputLanguageMode) ==
+        ConversationInputLanguage.both) {
+      final detected = languageDetector.detect(finalizedText);
+      logger.autoLanguage(
+        turnId: turnId,
+        event: 'primary_result',
+        details: <String, Object?>{
+          'selectedRecognitionLocale': _recognitionLocale,
+          'detectedTranscriptScript': detected.name,
+          'confidence': _confidence > 0 ? _confidence : 'unavailable',
+          'primaryResult': finalizedText,
+          'usable': finalizedText.isNotEmpty,
+          'fallbackUsed': false,
+          'fallbackAvailable': false,
+          'fallbackReason': 'raw_audio_not_retained_by_speech_to_text',
+        },
+      );
+    }
     try {
       if (finalizedText.isEmpty) {
         logger.turn(
@@ -1211,6 +1284,13 @@ class ConversationAssistController extends ChangeNotifier {
           state: 'FINALIZING',
           event: 'empty_transcript_returning_to_wait',
         );
+        if (_isKoreanRecognition) {
+          _logKoreanTurnFailure(
+            turnId,
+            sessionId,
+            'NO_FINAL_TRANSCRIPT',
+          );
+        }
         if (_listenModeEnabled) {
           await _resumeListening(turnId, reason: 'no_usable_transcript');
         } else {
@@ -1259,6 +1339,9 @@ class ConversationAssistController extends ChangeNotifier {
           state: 'STALE',
           event: 'processing_result_ignored',
         );
+        if (_isKoreanRecognition) {
+          _logKoreanTurnFailure(turnId, sessionId, 'TURN_MARKED_STALE');
+        }
         return;
       }
       _clearProcessingWatchdog(turnId);
@@ -1279,6 +1362,13 @@ class ConversationAssistController extends ChangeNotifier {
           'primaryReady': relevant,
         },
       );
+      if (!relevant && _isKoreanRecognition) {
+        _logKoreanTurnFailure(
+          turnId,
+          sessionId,
+          'RESPONSE_GENERATION_FAILED',
+        );
+      }
       if (relevant && _autoSpeak) {
         var ttsCompleted = false;
         if (_ttsStartedTurns.add(turnId)) {
@@ -1291,6 +1381,9 @@ class ConversationAssistController extends ChangeNotifier {
           await Future<void>.delayed(Duration.zero);
           _publishPendingVariantsSafely(turnId);
           ttsCompleted = await speaking;
+          if (!ttsCompleted && _isKoreanRecognition) {
+            _logKoreanTurnFailure(turnId, sessionId, 'TTS_FAILED');
+          }
         } else {
           logger.turn(
             turnId: turnId,
@@ -1298,19 +1391,20 @@ class ConversationAssistController extends ChangeNotifier {
             event: 'autoSpeak_skipped_ALREADY_STARTED',
           );
         }
-        if (_isCurrentTurn(turnId) && _listenModeEnabled && _autoSpeak) {
+        if (_isCurrentTurn(turnId) && _listenModeEnabled) {
           await _resumeListening(
             turnId,
             reason: ttsCompleted
                 ? 'tts_completion'
                 : 'tts_unavailable_or_failed',
+            audioReleaseDelay:
+                ttsCompleted ? postTtsAudioReleaseDelay : Duration.zero,
           );
         } else if (_isCurrentTurn(turnId)) {
-          _listenModeEnabled = false;
           _setSpeechState(
             ConversationSpeechState.idle,
             sessionId,
-            'tts_complete_auto_resume_disabled',
+            'tts_complete_session_stopped',
           );
           _setPhase(ConversationAssistPhase.suggestions);
         }
@@ -1353,6 +1447,13 @@ class ConversationAssistController extends ChangeNotifier {
           'stack': stackTrace,
         },
       );
+      if (_isKoreanRecognition) {
+        _logKoreanTurnFailure(
+          turnId,
+          sessionId,
+          'RESPONSE_GENERATION_FAILED',
+        );
+      }
       if (_isCurrentTurn(turnId)) {
         _errorMessage = "Couldn't generate a reply.";
         _setSpeechState(
@@ -1460,6 +1561,18 @@ class ConversationAssistController extends ChangeNotifier {
       );
       _setPhase(ConversationAssistPhase.waitingForSpeech);
       _startVadMonitoring(sessionId);
+      _consecutiveRecognitionRecoveries = 0;
+      logger.turn(
+        turnId: _resumingFromTurnId ?? _activeTurnId,
+        state: 'READY_FOR_SPEECH',
+        event: 'rearm_audio_verified',
+        details: <String, Object?>{
+          'vadArmed': _vadTimer != null,
+          'microphoneActive': true,
+          'recognizerReady': true,
+          'locale': _recognitionLocale,
+        },
+      );
       if (_isKoreanRecognition) {
         logger.korean(
           turnId: _activeCaptureTurnId ?? 0,
@@ -1696,6 +1809,8 @@ class ConversationAssistController extends ChangeNotifier {
     int? platformCode,
   }) {
     if (_activeSessionId != sessionId) return;
+    final wasEstablishedTurn =
+        _speechState != ConversationSpeechState.starting;
     _startupWatchdog?.cancel();
     _stopVadMonitoring();
     _activeSessionId = null;
@@ -1704,6 +1819,8 @@ class ConversationAssistController extends ChangeNotifier {
     _errorMessage = message;
     final permission = normalized.contains('permission') ||
         normalized.contains('notallowed');
+    final recoverablePlatformError =
+        !permission && platformCode != 12 && platformCode != 13;
     logger.event(
       sessionId: sessionId,
       state: 'ERROR',
@@ -1714,12 +1831,25 @@ class ConversationAssistController extends ChangeNotifier {
         'permanent': permanent,
       },
     );
+    if (_isKoreanRecognition) {
+      final failureReason = platformCode == 6
+          ? 'NO_SPEECH_DETECTED'
+          : platformCode == 7
+              ? 'NO_FINAL_TRANSCRIPT'
+              : 'RECOGNITION_ERROR_${platformCode ?? 'UNKNOWN'}';
+      _logKoreanTurnFailure(
+        _activeCaptureTurnId ?? _activeTurnId,
+        sessionId,
+        failureReason,
+      );
+    }
     _recoverFromRecognitionError(
       sessionId,
       event: 'recognition_error_complete',
       phase: permission
           ? ConversationAssistPhase.permissionDenied
           : ConversationAssistPhase.error,
+      automaticallyRearm: recoverablePlatformError && wasEstablishedTurn,
     );
   }
 
@@ -1898,12 +2028,60 @@ class ConversationAssistController extends ChangeNotifier {
     }
   }
 
-  Future<void> _resumeListening(int turnId, {required String reason}) async {
+  Future<void> _resumeListening(
+    int turnId, {
+    required String reason,
+    Duration audioReleaseDelay = Duration.zero,
+  }) {
+    return _armNextConversationTurn(
+      turnId,
+      reason: reason,
+      audioReleaseDelay: audioReleaseDelay,
+    );
+  }
+
+  /// Rearms one native recognizer session inside the still-enabled Listen Mode
+  /// session. Android recognition is one-shot, so this recreates only the
+  /// per-turn recognizer; conversation history and all session settings remain.
+  Future<void> _armNextConversationTurn(
+    int turnId, {
+    required String reason,
+    required Duration audioReleaseDelay,
+  }) {
+    final existing = _rearmOperation;
+    if (existing != null) {
+      logger.turn(
+        turnId: turnId,
+        state: _speechState.name.toUpperCase(),
+        event: 'armNextConversationTurn_duplicate_ignored',
+        details: <String, Object?>{'reason': reason},
+      );
+      return existing;
+    }
+    final generation = ++_rearmGeneration;
+    final operation = _performRearm(
+      turnId,
+      reason: reason,
+      audioReleaseDelay: audioReleaseDelay,
+      generation: generation,
+    );
+    _rearmOperation = operation;
+    return operation.whenComplete(() {
+      if (identical(_rearmOperation, operation)) _rearmOperation = null;
+    });
+  }
+
+  Future<void> _performRearm(
+    int turnId, {
+    required String reason,
+    required Duration audioReleaseDelay,
+    required int generation,
+  }) async {
     if (_closed || !_listenModeEnabled || !_isCurrentTurn(turnId)) {
       logger.turn(
         turnId: turnId,
         state: _speechState.name.toUpperCase(),
-        event: 'resumeListening_skipped',
+        event: 'armNextConversationTurn_skipped',
         details: <String, Object?>{
           'listenModeEnabled': _listenModeEnabled,
           'currentTurn': _isCurrentTurn(turnId),
@@ -1914,8 +2092,12 @@ class ConversationAssistController extends ChangeNotifier {
     logger.turn(
       turnId: turnId,
       state: 'RESUMING',
-      event: 'resumeListening_requested',
-      details: <String, Object?>{'reason': reason},
+      event: 'scheduling_rearm',
+      details: <String, Object?>{
+        'reason': reason,
+        'listenModeEnabled': _listenModeEnabled,
+        'audioReleaseDelayMs': audioReleaseDelay.inMilliseconds,
+      },
     );
     _resumingFromTurnId = turnId;
     _resumeRequestedAt = DateTime.now();
@@ -1925,7 +2107,106 @@ class ConversationAssistController extends ChangeNotifier {
       'resume_requested',
     );
     _setPhase(ConversationAssistPhase.resuming);
-    await _beginRecognitionSession(resumedFromTurnId: turnId);
+
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      final delay = attempt == 1 ? audioReleaseDelay : rearmRetryDelay;
+      if (delay > Duration.zero) {
+        logger.turn(
+          turnId: turnId,
+          state: 'RESUMING',
+          event: 'audio_release_delay',
+          details: <String, Object?>{
+            'delayMs': delay.inMilliseconds,
+            'attempt': attempt,
+          },
+        );
+        await _waitForRearmDelay(delay);
+      }
+      if (_closed ||
+          !_listenModeEnabled ||
+          !_isCurrentTurn(turnId) ||
+          generation != _rearmGeneration) {
+        logger.turn(
+          turnId: turnId,
+          state: _speechState.name.toUpperCase(),
+          event: 'rearm_cancelled_before_start',
+          details: <String, Object?>{'attempt': attempt},
+        );
+        return;
+      }
+      logger.turn(
+        turnId: turnId,
+        state: 'RESUMING',
+        event: 'armNextConversationTurn',
+        details: <String, Object?>{'attempt': attempt},
+      );
+      final started =
+          await _beginRecognitionSession(resumedFromTurnId: turnId);
+      if (started) {
+        logger.turn(
+          turnId: turnId,
+          state: 'STARTING',
+          event: 'recognizer_rearm_start_accepted',
+          details: <String, Object?>{
+            'attempt': attempt,
+            'microphoneActive': false,
+            'waitingForNativeAudioCallback': true,
+          },
+        );
+        return;
+      }
+    }
+    logger.turn(
+      turnId: turnId,
+      state: 'ERROR',
+      event: 'rearm_failed_after_bounded_retry',
+      details: <String, Object?>{
+        'listenModeEnabled': _listenModeEnabled,
+        'attempts': 2,
+      },
+    );
+  }
+
+  Future<void> _waitForRearmDelay(Duration delay) {
+    final completer = Completer<void>();
+    _rearmDelayCompleter = completer;
+    _rearmDelayTimer = Timer(delay, () {
+      if (!completer.isCompleted) completer.complete();
+      if (identical(_rearmDelayCompleter, completer)) {
+        _rearmDelayCompleter = null;
+        _rearmDelayTimer = null;
+      }
+    });
+    return completer.future;
+  }
+
+  void _cancelPendingRearm(String reason) {
+    _rearmGeneration++;
+    _rearmOperation = null;
+    _rearmDelayTimer?.cancel();
+    _rearmDelayTimer = null;
+    final completer = _rearmDelayCompleter;
+    _rearmDelayCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
+    logger.turn(
+      turnId: _activeTurnId,
+      state: _speechState.name.toUpperCase(),
+      event: 'pending_rearm_cancelled',
+      details: <String, Object?>{'reason': reason},
+    );
+  }
+
+  void _logKoreanTurnFailure(
+    int turnId,
+    int sessionId,
+    String reason,
+  ) {
+    logger.korean(
+      turnId: turnId,
+      sessionId: sessionId,
+      event: 'KOREAN_TURN_FAILED',
+      details: <String, Object?>{'reason': reason},
+    );
   }
 
   void _armProcessingWatchdog(int turnId, int sessionId) {
@@ -2087,8 +2368,8 @@ class ConversationAssistController extends ChangeNotifier {
     int sessionId, {
     required String event,
     required ConversationAssistPhase phase,
+    required bool automaticallyRearm,
   }) {
-    _listenModeEnabled = false;
     _resumingFromTurnId = null;
     _resumeRequestedAt = null;
     _setSpeechState(ConversationSpeechState.error, sessionId, event);
@@ -2101,6 +2382,25 @@ class ConversationAssistController extends ChangeNotifier {
       'error_recovered_to_idle',
       notify: false,
     );
+    if (!_listenModeEnabled || !automaticallyRearm) return;
+    if (_consecutiveRecognitionRecoveries >= 1) {
+      logger.turn(
+        turnId: _activeTurnId,
+        state: 'ERROR',
+        event: 'recognition_recovery_exhausted',
+        details: const <String, Object?>{'attempts': 1},
+      );
+      return;
+    }
+    _consecutiveRecognitionRecoveries++;
+    final recoveryTurnId = _activeCaptureTurnId ?? ++_turnSequence;
+    _activeCaptureTurnId = null;
+    _activeTurnId = recoveryTurnId;
+    unawaited(_resumeListening(
+      recoveryTurnId,
+      reason: 'recognition_error_recovery',
+      audioReleaseDelay: rearmRetryDelay,
+    ));
   }
 
   void _armStartupWatchdog(int sessionId) {
@@ -2120,8 +2420,8 @@ class ConversationAssistController extends ChangeNotifier {
           'nativeStatus': _nativeRecognitionStatus,
         },
       );
+      final recoveryTurnId = _resumingFromTurnId ?? _activeTurnId;
       _activeSessionId = null;
-      _listenModeEnabled = false;
       _stopVadMonitoring();
       _nativeRecognitionStatus = 'STARTUP_STALLED';
       _errorMessage = 'Speech recognizer did not activate. Please try again.';
@@ -2131,7 +2431,24 @@ class ConversationAssistController extends ChangeNotifier {
         'startup_watchdog_failed',
       );
       _setPhase(ConversationAssistPhase.error);
-      unawaited(_cancelStalledSession(sessionId));
+      unawaited(_cancelStalledSession(sessionId).then((_) async {
+        if (!_listenModeEnabled || _closed) return;
+        if (_consecutiveRecognitionRecoveries >= 1) {
+          logger.turn(
+            turnId: recoveryTurnId,
+            state: 'ERROR',
+            event: 'startup_recovery_exhausted',
+            details: const <String, Object?>{'attempts': 1},
+          );
+          return;
+        }
+        _consecutiveRecognitionRecoveries++;
+        await _resumeListening(
+          recoveryTurnId,
+          reason: 'startup_watchdog_recovery',
+          audioReleaseDelay: rearmRetryDelay,
+        );
+      }));
       _setSpeechState(
         ConversationSpeechState.idle,
         sessionId,
@@ -2222,6 +2539,7 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _cancelPendingRearm('controller_closed');
     _startupWatchdog?.cancel();
     _processingWatchdog?.cancel();
     _stopVadMonitoring();

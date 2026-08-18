@@ -173,7 +173,11 @@ class SpeechToTextRecognitionService
       ConversationInputLanguage.automatic ||
       ConversationInputLanguage.both => throw StateError('unreachable'),
     };
-    final selected = _supportedLocale(locales, requested);
+    // Forced Korean is a diagnostic baseline: never silently substitute a
+    // different Korean region for the requested ko-KR recognizer.
+    final selected = language == ConversationInputLanguage.korean
+        ? _exactSupportedLocale(locales, requested)
+        : _supportedLocale(locales, requested);
     if (selected == null) {
       throw UnsupportedError(
         'The installed recognizer does not support $requested.',
@@ -187,15 +191,25 @@ class SpeechToTextRecognitionService
   }
 
   String? _supportedLocale(List<LocaleName> locales, String requested) {
+    final exact = _exactSupportedLocale(locales, requested);
+    if (exact != null) return exact;
     final wanted = _canonicalLocale(requested);
-    for (final locale in locales) {
-      if (_canonicalLocale(locale.localeId) == wanted) return locale.localeId;
-    }
     final prefix = wanted.split('-').first;
     for (final locale in locales) {
       if (_canonicalLocale(locale.localeId).split('-').first == prefix) {
         return locale.localeId;
       }
+    }
+    return null;
+  }
+
+  String? _exactSupportedLocale(
+    List<LocaleName> locales,
+    String requested,
+  ) {
+    final wanted = _canonicalLocale(requested);
+    for (final locale in locales) {
+      if (_canonicalLocale(locale.localeId) == wanted) return locale.localeId;
     }
     return null;
   }
