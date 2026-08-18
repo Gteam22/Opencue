@@ -640,6 +640,29 @@ void main() {
     expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
   });
 
+  test('Android error_busy waits for native release before retrying',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.error('error_busy', permanent: true);
+    // Android normally follows the error with notListening. That callback
+    // must not shorten the busy-specific cooldown.
+    recognition.status('notListening');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(recognition.startCount, 1);
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.errorMessage, isNull);
+
+    await Future<void>.delayed(const Duration(milliseconds: 560));
+    expect(recognition.startCount, 2);
+    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+  });
+
   test('Auto Speak suppresses self-voice and resumes recognition', () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService()..hold();

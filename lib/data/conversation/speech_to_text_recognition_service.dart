@@ -15,6 +15,11 @@ class SpeechToTextRecognitionService
   final SpeechToText _speech;
   ConversationRecognitionCallbacks? _callbacks;
   bool _available = false;
+  Future<void>? _startInFlight;
+  DateTime? _lastNativeReleaseAt;
+
+  static const Duration _nativeReleaseDelay =
+      Duration(milliseconds: 700);
 
   @override
   bool get isSupported => _available;
@@ -33,8 +38,37 @@ class SpeechToTextRecognitionService
 
   @override
   Future<void> start({required ConversationInputLanguage language}) async {
+    final inFlight = _startInFlight;
+    if (inFlight != null) {
+      await inFlight;
+      if (_speech.isListening) return;
+    }
+    final start = _startSafely(language);
+    _startInFlight = start;
+    try {
+      await start;
+    } finally {
+      if (identical(_startInFlight, start)) _startInFlight = null;
+    }
+  }
+
+  Future<void> _startSafely(ConversationInputLanguage language) async {
     if (!_available || _callbacks == null) {
       throw StateError('Speech recognition is not available.');
+    }
+    // Android's SpeechRecognizer releases asynchronously. Starting a new
+    // session immediately after stop/cancel produces ERROR_RECOGNIZER_BUSY,
+    // even though the previous Future has completed.
+    if (_speech.isListening) {
+      await _speech.cancel();
+      _lastNativeReleaseAt = DateTime.now();
+    }
+    final releasedAt = _lastNativeReleaseAt;
+    if (releasedAt != null) {
+      final elapsed = DateTime.now().difference(releasedAt);
+      if (elapsed < _nativeReleaseDelay) {
+        await Future<void>.delayed(_nativeReleaseDelay - elapsed);
+      }
     }
     await _speech.listen(
       onResult: _onResult,
@@ -94,14 +128,36 @@ class SpeechToTextRecognitionService
   }
 
   @override
-  Future<void> stop() => _speech.stop();
+  Future<void> stop() async {
+    final start = _startInFlight;
+    if (start != null) {
+      try {
+        await start;
+      } on Object {
+        // The caller is already stopping; preserve the stop operation.
+      }
+    }
+    await _speech.stop();
+    _lastNativeReleaseAt = DateTime.now();
+  }
 
   @override
-  Future<void> cancel() => _speech.cancel();
+  Future<void> cancel() async {
+    final start = _startInFlight;
+    if (start != null) {
+      try {
+        await start;
+      } on Object {
+        // The caller is already cancelling; preserve the cancel operation.
+      }
+    }
+    await _speech.cancel();
+    _lastNativeReleaseAt = DateTime.now();
+  }
 
   @override
   Future<void> dispose() async {
-    await _speech.cancel();
+    await cancel();
     _callbacks = null;
   }
 }

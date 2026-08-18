@@ -92,6 +92,8 @@ class ConversationAssistController extends ChangeNotifier {
   bool _japaneseTtsEnabled = true;
   bool _koreanTtsEnabled = true;
   int _consecutiveClientErrors = 0;
+  int _consecutiveBusyErrors = 0;
+  DateTime? _recognitionRetryNotBefore;
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
@@ -163,6 +165,8 @@ class ConversationAssistController extends ChangeNotifier {
     _errorMessage = null;
     _finalizing = false;
     _consecutiveClientErrors = 0;
+    _consecutiveBusyErrors = 0;
+    _recognitionRetryNotBefore = null;
     _listenModeActive = true;
     _startVadTimer();
     await _startRecognitionCycle();
@@ -789,6 +793,13 @@ class ConversationAssistController extends ChangeNotifier {
         _suppressRecognition) {
       return;
     }
+    final retryAt = _recognitionRetryNotBefore;
+    if (retryAt != null && DateTime.now().isBefore(retryAt)) {
+      _scheduleRecognitionRestart(
+        delay: retryAt.difference(DateTime.now()),
+      );
+      return;
+    }
     if (_speechController?.speakingLineId != null) {
       _suppressRecognition = true;
       _setPhase(ConversationAssistPhase.speaking);
@@ -813,6 +824,11 @@ class ConversationAssistController extends ChangeNotifier {
     Duration delay = const Duration(milliseconds: 120),
   }) {
     if (!_listenModeActive || _suppressRecognition || _closed) return;
+    final retryAt = _recognitionRetryNotBefore;
+    if (retryAt != null) {
+      final remaining = retryAt.difference(DateTime.now());
+      if (!remaining.isNegative && remaining > delay) delay = remaining;
+    }
     _restartTimer?.cancel();
     _restartTimer = Timer(delay, () {
       unawaited(_startRecognitionCycle());
@@ -872,7 +888,11 @@ class ConversationAssistController extends ChangeNotifier {
       return;
     }
     if (text.trim().isNotEmpty) _transcript = text.trim();
-    if (text.trim().isNotEmpty) _consecutiveClientErrors = 0;
+    if (text.trim().isNotEmpty) {
+      _consecutiveClientErrors = 0;
+      _consecutiveBusyErrors = 0;
+      _recognitionRetryNotBefore = null;
+    }
     _confidence = confidence;
     if (_transcript.isNotEmpty &&
         _phase == ConversationAssistPhase.waitingForSpeech) {
@@ -925,6 +945,22 @@ class ConversationAssistController extends ChangeNotifier {
         _scheduleRecognitionRestart(
           delay: const Duration(milliseconds: 400),
         );
+        return;
+      }
+    }
+    if ((normalized.contains('error_busy') ||
+            normalized.contains('recognizer_busy')) &&
+        _listenModeActive) {
+      _recognizerActive = false;
+      _consecutiveBusyErrors++;
+      if (_consecutiveBusyErrors <= 4) {
+        final backoff = Duration(
+          milliseconds: 750 * (1 << (_consecutiveBusyErrors - 1)),
+        );
+        _recognitionRetryNotBefore = DateTime.now().add(backoff);
+        _errorMessage = null;
+        _setPhase(ConversationAssistPhase.waitingForSpeech);
+        _scheduleRecognitionRestart(delay: backoff);
         return;
       }
     }
