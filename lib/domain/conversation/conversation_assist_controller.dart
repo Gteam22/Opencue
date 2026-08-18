@@ -17,10 +17,12 @@ import 'transcript_normalizer.dart';
 enum ConversationAssistPhase {
   idle,
   initializing,
+  starting,
   waitingForSpeech,
   hearingSpeech,
   understanding,
   speaking,
+  stopping,
   suggestions,
   noSpeech,
   unavailable,
@@ -33,8 +35,11 @@ enum ConversationAssistPhase {
 /// path returns to IDLE.
 enum ConversationSpeechState {
   idle,
-  listening,
+  starting,
+  readyForSpeech,
+  speechDetected,
   processing,
+  stopping,
   ttsPlaying,
   error,
 }
@@ -48,6 +53,7 @@ class ConversationAssistController extends ChangeNotifier {
     this.normalizer = const TranscriptNormalizer(),
     this.languageDetector = const ConversationLanguageDetector(),
     this.logger = const ConversationSpeechLogger(),
+    this.startupWatchdogDuration = const Duration(seconds: 8),
   }) : _recognition = recognition;
 
   final ConversationRecognitionService _recognition;
@@ -56,6 +62,7 @@ class ConversationAssistController extends ChangeNotifier {
   final TranscriptNormalizer normalizer;
   final ConversationLanguageDetector languageDetector;
   final ConversationSpeechLogger logger;
+  final Duration startupWatchdogDuration;
 
   ConversationAssistPhase _phase = ConversationAssistPhase.idle;
   String _transcript = '';
@@ -98,6 +105,11 @@ class ConversationAssistController extends ChangeNotifier {
   ConversationSpeechState _speechState = ConversationSpeechState.idle;
   int _sessionSequence = 0;
   int? _activeSessionId;
+  Timer? _startupWatchdog;
+  Future<void>? _recognitionCleanup;
+  String? _recognitionLocale;
+  String? _recognitionStrategy;
+  String _nativeRecognitionStatus = 'IDLE';
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
@@ -115,13 +127,24 @@ class ConversationAssistController extends ChangeNotifier {
   int get cueRevision => _cueRevision;
   String? get activeIntentId => _activeIntentId;
   Set<String> get shownResponseIds => Set.unmodifiable(_shownResponseIds);
-  bool get isListening => _speechState == ConversationSpeechState.listening;
-  bool get listenModeActive => isListening;
+  bool get isListening => switch (_speechState) {
+        ConversationSpeechState.starting ||
+        ConversationSpeechState.readyForSpeech ||
+        ConversationSpeechState.speechDetected => true,
+        _ => false,
+      };
+  bool get listenModeActive => switch (_speechState) {
+        ConversationSpeechState.idle || ConversationSpeechState.error => false,
+        _ => true,
+      };
   bool get recognitionSuppressed => _suppressRecognition;
   bool get autoSpeak => _autoSpeak;
   int get activeTurnId => _activeTurnId;
   int? get activeRecognitionSessionId => _activeSessionId;
   ConversationSpeechState get speechState => _speechState;
+  String? get recognitionLocale => _recognitionLocale;
+  String? get recognitionStrategy => _recognitionStrategy;
+  String get nativeRecognitionStatus => _nativeRecognitionStatus;
 
   Future<void> prepare() async {
     if (_initialized) return;
@@ -157,6 +180,9 @@ class ConversationAssistController extends ChangeNotifier {
   }) async {
     if (!_initialized) await prepare();
     if (!_initialized) return;
+    final pendingCleanup = _recognitionCleanup;
+    if (pendingCleanup != null) await pendingCleanup;
+    if (_closed) return;
     if (_speechState != ConversationSpeechState.idle ||
         _activeSessionId != null) {
       logger.event(
@@ -189,13 +215,49 @@ class ConversationAssistController extends ChangeNotifier {
     _errorMessage = null;
     final sessionId = ++_sessionSequence;
     _activeSessionId = sessionId;
-    _setSpeechState(ConversationSpeechState.listening, sessionId, 'tap_start');
-    _setPhase(ConversationAssistPhase.waitingForSpeech);
+    _recognitionLocale = null;
+    _recognitionStrategy = null;
+    _nativeRecognitionStatus = 'START_REQUESTED';
+    final effectiveLanguage = _effectiveInputLanguage(outputLanguageMode);
+    logger.event(
+      sessionId: sessionId,
+      state: 'IDLE',
+      event: 'user_pressed_listen',
+      details: <String, Object?>{
+        'selectedInput': inputLanguage.name,
+        'outputLanguageMode': outputLanguageMode.name,
+        'effectiveRecognitionMode': effectiveLanguage.name,
+      },
+    );
+    _setSpeechState(
+      ConversationSpeechState.starting,
+      sessionId,
+      'start_requested',
+    );
+    _setPhase(ConversationAssistPhase.starting);
+    _armStartupWatchdog(sessionId);
     try {
-      await _recognition.start(
+      final info = await _recognition.start(
         sessionId: sessionId,
-        language: inputLanguage,
+        language: effectiveLanguage,
       );
+      if (_activeSessionId != sessionId) return;
+      _recognitionLocale = info.localeId;
+      _recognitionStrategy = info.strategy;
+      logger.event(
+        sessionId: sessionId,
+        state: _speechState.name.toUpperCase(),
+        event: 'recognition_configuration_applied',
+        details: <String, Object?>{
+          'recognitionLanguage': info.localeId,
+          'strategy': info.strategy,
+          'languageDetectionSupported':
+              info.nativeLanguageDetectionSupported,
+          'languageSwitchingSupported':
+              info.nativeLanguageSwitchingSupported,
+        },
+      );
+      notifyListeners();
     } on Object catch (error) {
       if (_activeSessionId != sessionId) return;
       _activeSessionId = null;
@@ -208,31 +270,93 @@ class ConversationAssistController extends ChangeNotifier {
     }
   }
 
-  /// Requests the terminal callback for the one active manual session.
+  ConversationInputLanguage _effectiveInputLanguage(LanguageMode outputMode) {
+    if (inputLanguage != ConversationInputLanguage.automatic) {
+      return inputLanguage;
+    }
+    return switch (outputMode) {
+      LanguageMode.japanese => ConversationInputLanguage.japanese,
+      LanguageMode.korean => ConversationInputLanguage.korean,
+      LanguageMode.both => ConversationInputLanguage.both,
+      LanguageMode.english || LanguageMode.bilingual =>
+        ConversationInputLanguage.automatic,
+    };
+  }
+
+  /// Immediately invalidates and cancels the current manual Listen session.
   Future<void> stop() async {
     final sessionId = _activeSessionId;
-    if (sessionId == null || !isListening) return;
+    if (!listenModeActive && sessionId == null) return;
+    final wasTtsPlaying =
+        _speechState == ConversationSpeechState.ttsPlaying;
     logger.event(
-      sessionId: sessionId,
-      state: 'LISTENING',
-      event: 'tap_stop',
+      sessionId: sessionId ?? 0,
+      state: _speechState.name.toUpperCase(),
+      event: 'stop_button_pressed',
     );
+    _startupWatchdog?.cancel();
+    _activeSessionId = null;
+    _activeTurnId = ++_turnSequence;
+    _nativeRecognitionStatus = 'CANCELLED_BY_USER';
+    _setSpeechState(
+      ConversationSpeechState.stopping,
+      sessionId ?? 0,
+      'session_invalidated',
+    );
+    _setPhase(ConversationAssistPhase.stopping);
+    final cleanup = _cancelStoppedSession(
+      sessionId,
+      stopTts: wasTtsPlaying,
+    );
+    _recognitionCleanup = cleanup;
+    _suppressRecognition = false;
+    _setSpeechState(
+      ConversationSpeechState.idle,
+      sessionId ?? 0,
+      'stop_returned_to_idle',
+    );
+    _setPhase(ConversationAssistPhase.idle);
     try {
-      await _recognition.stop(sessionId: sessionId);
+      await cleanup;
+    } finally {
+      if (identical(_recognitionCleanup, cleanup)) {
+        _recognitionCleanup = null;
+      }
+    }
+  }
+
+  Future<void> _cancelStoppedSession(
+    int? sessionId, {
+    required bool stopTts,
+  }) async {
+    try {
+      if (sessionId != null) {
+        logger.event(
+          sessionId: sessionId,
+          state: 'STOPPING',
+          event: 'recognizer_cancel_requested',
+        );
+        await _recognition.cancel(sessionId: sessionId);
+      }
+      if (stopTts) await _speechController?.stop();
+      logger.event(
+        sessionId: sessionId ?? 0,
+        state: 'IDLE',
+        event: 'stop_cleanup_complete',
+      );
     } on Object catch (error) {
-      if (_activeSessionId != sessionId) return;
-      _activeSessionId = null;
-      _errorMessage = '$error';
-      _recoverFromRecognitionError(
-        sessionId,
-        event: 'stop_failed',
-        phase: ConversationAssistPhase.error,
+      logger.event(
+        sessionId: sessionId ?? 0,
+        state: 'IDLE',
+        event: 'stop_cleanup_error_ignored',
+        details: <String, Object?>{'message': error},
       );
     }
   }
 
   Future<void> cancel() async {
     final sessionId = _activeSessionId;
+    _startupWatchdog?.cancel();
     _activeTurnId = ++_turnSequence;
     _activeSessionId = null;
     if (sessionId != null) {
@@ -284,6 +408,7 @@ class ConversationAssistController extends ChangeNotifier {
     required ConversationPreferences preferences,
   }) async {
     final sessionId = _activeSessionId;
+    _startupWatchdog?.cancel();
     if (sessionId != null) {
       _activeSessionId = null;
       await _recognition.cancel(sessionId: sessionId);
@@ -606,13 +731,19 @@ class ConversationAssistController extends ChangeNotifier {
       displayTexts: _displayTexts(next),
       ttsTexts: _ttsTexts(next),
     );
-    if (isListening) {
-      _setPhase(_suppressRecognition
-          ? ConversationAssistPhase.speaking
-          : ConversationAssistPhase.waitingForSpeech);
-    } else {
-      _setPhase(ConversationAssistPhase.suggestions);
-    }
+    _setPhase(switch (_speechState) {
+      ConversationSpeechState.starting => ConversationAssistPhase.starting,
+      ConversationSpeechState.readyForSpeech =>
+        ConversationAssistPhase.waitingForSpeech,
+      ConversationSpeechState.speechDetected =>
+        ConversationAssistPhase.hearingSpeech,
+      ConversationSpeechState.processing =>
+        ConversationAssistPhase.understanding,
+      ConversationSpeechState.stopping => ConversationAssistPhase.stopping,
+      ConversationSpeechState.ttsPlaying => ConversationAssistPhase.speaking,
+      ConversationSpeechState.idle || ConversationSpeechState.error =>
+        ConversationAssistPhase.suggestions,
+    });
   }
 
   Map<String, String> _slotLineIds(ConversationSuggestionResult result) =>
@@ -801,7 +932,9 @@ class ConversationAssistController extends ChangeNotifier {
 
   Future<void> _completeSpeechSession(int sessionId, String text) async {
     if (_activeSessionId != sessionId || _closed) return;
+    _startupWatchdog?.cancel();
     _activeSessionId = null;
+    _nativeRecognitionStatus = 'TERMINAL';
     _setSpeechState(
       ConversationSpeechState.processing,
       sessionId,
@@ -855,13 +988,17 @@ class ConversationAssistController extends ChangeNotifier {
     bool isFinal,
     double confidence,
   ) {
-    if (_activeSessionId != sessionId ||
-        !isListening ||
-        _suppressRecognition) return;
+    if (_activeSessionId != sessionId || _suppressRecognition) return;
+    _startupWatchdog?.cancel();
     if (text.trim().isNotEmpty) _transcript = text.trim();
     _confidence = confidence;
-    if (_transcript.isNotEmpty &&
-        _phase == ConversationAssistPhase.waitingForSpeech) {
+    _nativeRecognitionStatus = isFinal ? 'FINAL_RESULT' : 'PARTIAL_RESULT';
+    if (_transcript.isNotEmpty && !isFinal) {
+      _setSpeechState(
+        ConversationSpeechState.speechDetected,
+        sessionId,
+        'speech_result_detected',
+      );
       _setPhase(ConversationAssistPhase.hearingSpeech);
     } else {
       notifyListeners();
@@ -886,8 +1023,23 @@ class ConversationAssistController extends ChangeNotifier {
   }
 
   void _onSoundLevel(int sessionId, double level) {
-    if (_activeSessionId != sessionId || !isListening) return;
+    if (_activeSessionId != sessionId) return;
     _soundLevel = level;
+    if (_speechState == ConversationSpeechState.starting) {
+      // speech_to_text exposes Android onRmsChanged as sound-level callbacks.
+      // This is the first public event proving that the native recognizer has
+      // an active audio listener; its earlier `listening` status is emitted by
+      // the plugin before Android creates the recognizer.
+      _startupWatchdog?.cancel();
+      _nativeRecognitionStatus = 'AUDIO_ACTIVE';
+      _setSpeechState(
+        ConversationSpeechState.readyForSpeech,
+        sessionId,
+        'native_audio_callback_ready',
+      );
+      _setPhase(ConversationAssistPhase.waitingForSpeech);
+      return;
+    }
     notifyListeners();
   }
 
@@ -899,12 +1051,17 @@ class ConversationAssistController extends ChangeNotifier {
       event: 'controller_status',
       details: <String, Object?>{'value': status},
     );
+    _nativeRecognitionStatus = 'PLUGIN_${status.toUpperCase()}';
     if (status == 'listening' &&
-        _phase == ConversationAssistPhase.waitingForSpeech) {
+        _speechState == ConversationSpeechState.starting) {
+      // This plugin status is a start-request acknowledgement, not Android's
+      // onReadyForSpeech. Remain STARTING until audio/result callbacks prove
+      // the native listener is alive.
       notifyListeners();
       return;
     }
-    if (status == 'done' || status == 'notListening') {
+    if (status.startsWith('done') || status == 'notListening') {
+      _startupWatchdog?.cancel();
       unawaited(_completeSpeechSession(sessionId, _transcript));
     }
   }
@@ -916,7 +1073,9 @@ class ConversationAssistController extends ChangeNotifier {
     int? platformCode,
   }) {
     if (_activeSessionId != sessionId) return;
+    _startupWatchdog?.cancel();
     _activeSessionId = null;
+    _nativeRecognitionStatus = 'ERROR';
     final normalized = message.toLowerCase();
     _errorMessage = message;
     final permission = normalized.contains('permission') ||
@@ -981,14 +1140,16 @@ class ConversationAssistController extends ChangeNotifier {
       }
     } finally {
       _suppressRecognition = false;
-      _setSpeechState(
-        ConversationSpeechState.idle,
-        sessionId,
-        'tts_complete',
-      );
-      _setPhase(_result == null
-          ? ConversationAssistPhase.idle
-          : ConversationAssistPhase.suggestions);
+      if (_isCurrentTurn(turnId)) {
+        _setSpeechState(
+          ConversationSpeechState.idle,
+          sessionId,
+          'tts_complete',
+        );
+        _setPhase(_result == null
+            ? ConversationAssistPhase.idle
+            : ConversationAssistPhase.suggestions);
+      }
     }
   }
 
@@ -1091,6 +1252,55 @@ class ConversationAssistController extends ChangeNotifier {
     );
   }
 
+  void _armStartupWatchdog(int sessionId) {
+    _startupWatchdog?.cancel();
+    _startupWatchdog = Timer(startupWatchdogDuration, () {
+      if (_closed ||
+          _activeSessionId != sessionId ||
+          _speechState != ConversationSpeechState.starting) {
+        return;
+      }
+      logger.event(
+        sessionId: sessionId,
+        state: 'STARTING',
+        event: 'SPEECH_RECOGNIZER_STALLED',
+        details: <String, Object?>{
+          'timeoutMs': startupWatchdogDuration.inMilliseconds,
+          'nativeStatus': _nativeRecognitionStatus,
+        },
+      );
+      _activeSessionId = null;
+      _nativeRecognitionStatus = 'STARTUP_STALLED';
+      _errorMessage = 'Speech recognizer did not activate. Please try again.';
+      _setSpeechState(
+        ConversationSpeechState.error,
+        sessionId,
+        'startup_watchdog_failed',
+      );
+      _setPhase(ConversationAssistPhase.error);
+      unawaited(_cancelStalledSession(sessionId));
+      _setSpeechState(
+        ConversationSpeechState.idle,
+        sessionId,
+        'startup_watchdog_returned_to_idle',
+        notify: false,
+      );
+    });
+  }
+
+  Future<void> _cancelStalledSession(int sessionId) async {
+    try {
+      await _recognition.cancel(sessionId: sessionId);
+    } on Object catch (error) {
+      logger.event(
+        sessionId: sessionId,
+        state: 'IDLE',
+        event: 'stalled_cancel_error_ignored',
+        details: <String, Object?>{'message': error},
+      );
+    }
+  }
+
   void _setSpeechState(
     ConversationSpeechState value,
     int sessionId,
@@ -1103,7 +1313,26 @@ class ConversationAssistController extends ChangeNotifier {
       state: value.name.toUpperCase(),
       event: event,
     );
+    _logIllegalStateIfNeeded(sessionId);
     if (notify) notifyListeners();
+  }
+
+  void _logIllegalStateIfNeeded(int sessionId) {
+    final needsSession = _speechState == ConversationSpeechState.starting ||
+        _speechState == ConversationSpeechState.readyForSpeech ||
+        _speechState == ConversationSpeechState.speechDetected;
+    final illegal = (needsSession && _activeSessionId == null) ||
+        (_speechState == ConversationSpeechState.idle &&
+            _activeSessionId != null);
+    if (!illegal) return;
+    logger.event(
+      sessionId: sessionId,
+      state: _speechState.name.toUpperCase(),
+      event: 'ILLEGAL_STATE',
+      details: <String, Object?>{
+        'activeSession': _activeSessionId,
+      },
+    );
   }
 
   void _remember(Iterable<String> ids) {
@@ -1121,6 +1350,7 @@ class ConversationAssistController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _startupWatchdog?.cancel();
     _speechController?.removeListener(_onSpeechStateChanged);
     _speechController?.setPlaybackGuard(null);
     unawaited(close());
@@ -1130,9 +1360,12 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _startupWatchdog?.cancel();
     _activeSessionId = null;
     _speechController?.removeListener(_onSpeechStateChanged);
     _speechController?.setPlaybackGuard(null);
+    final cleanup = _recognitionCleanup;
+    if (cleanup != null) await cleanup;
     await _recognition.dispose();
   }
 }

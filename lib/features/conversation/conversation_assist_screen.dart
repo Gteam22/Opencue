@@ -120,6 +120,8 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
                 _ListenPanel(
                   controller: _controller,
                   onToggle: _listen,
+                  showDiagnostics:
+                      AppScope.of(context).settings.developerMode,
                 ),
                 _AutoSpeakControl(
                   value: AppScope.of(context)
@@ -270,22 +272,28 @@ class _ListenPanel extends StatelessWidget {
   const _ListenPanel({
     required this.controller,
     required this.onToggle,
+    required this.showDiagnostics,
   });
 
   final ConversationAssistController controller;
   final Future<void> Function() onToggle;
+  final bool showDiagnostics;
 
   @override
   Widget build(BuildContext context) {
     final strings = AppScope.strings(context);
     final theme = Theme.of(context);
-    final listening = controller.isListening;
-    final listenButtonEnabled = listening ||
-        controller.speechState == ConversationSpeechState.idle;
+    final listening = controller.listenModeActive;
     final phase = controller.phase;
+    final listenButtonEnabled =
+        phase != ConversationAssistPhase.initializing &&
+            (listening ||
+                controller.speechState == ConversationSpeechState.idle);
     final status = switch (phase) {
       ConversationAssistPhase.idle => strings.t('assist.ready'),
       ConversationAssistPhase.initializing => strings.t('assist.initializing'),
+      ConversationAssistPhase.starting =>
+        strings.t('assist.startingListener'),
       ConversationAssistPhase.waitingForSpeech =>
         strings.t('assist.waitingForSpeech'),
       ConversationAssistPhase.hearingSpeech =>
@@ -293,6 +301,7 @@ class _ListenPanel extends StatelessWidget {
       ConversationAssistPhase.understanding =>
         strings.t('assist.understanding'),
       ConversationAssistPhase.speaking => strings.t('assist.speaking'),
+      ConversationAssistPhase.stopping => strings.t('assist.stopping'),
       ConversationAssistPhase.suggestions => strings.t('assist.readyAgain'),
       ConversationAssistPhase.noSpeech => strings.t('assist.noSpeech'),
       ConversationAssistPhase.unavailable => strings.t('assist.unavailable'),
@@ -339,8 +348,29 @@ class _ListenPanel extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(status),
+                  if (showDiagnostics) ...<Widget>[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Recognizer: ${controller.nativeRecognitionStatus}  '
+                      'Language: ${controller.recognitionLocale ?? '-'}  '
+                      'Session: '
+                      '${controller.activeRecognitionSessionId ?? '-'}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (controller.recognitionStrategy != null)
+                      Text(
+                        'Strategy: ${controller.recognitionStrategy}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
                   if (phase == ConversationAssistPhase.hearingSpeech ||
+                      phase == ConversationAssistPhase.starting ||
                       phase == ConversationAssistPhase.understanding ||
+                      phase == ConversationAssistPhase.stopping ||
                       phase == ConversationAssistPhase.speaking) ...<Widget>[
                     const SizedBox(height: 8),
                     LinearProgressIndicator(

@@ -104,6 +104,7 @@ const Map<String, String> stringsEn = <String, String>{
   'assist.initializing': 'Preparing speech recognition…',
   'assist.inputLanguage': 'Recognition',
   'assist.language.automatic': 'Auto / device language',
+  'assist.language.both': 'Japanese + Korean (safe fallback)',
   'assist.language.english': 'English',
   'assist.language.japanese': 'Japanese',
   'assist.language.korean': 'Korean',
@@ -128,8 +129,10 @@ const Map<String, String> stringsEn = <String, String>{
   'assist.sessionHistory': 'This session',
   'assist.speaking': 'Speaking the primary response…',
   'assist.startListening': 'Start Listening',
+  'assist.startingListener': 'Starting listener…',
   'assist.stop': 'Stop listening',
   'assist.stopListening': 'Stop Listening',
+  'assist.stopping': 'Stopping…',
   'assist.style': 'Response style',
   'assist.style.natural': 'Natural',
   'assist.subtitle':

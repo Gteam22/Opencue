@@ -3,7 +3,13 @@ import '../models/opener_line.dart';
 import 'conversation_intent.dart';
 
 /// Recognition language is deliberately separate from the display language.
-enum ConversationInputLanguage { automatic, japanese, korean, english }
+enum ConversationInputLanguage {
+  automatic,
+  japanese,
+  korean,
+  english,
+  both,
+}
 
 enum DetectedLanguage { japanese, korean, english, unknown }
 

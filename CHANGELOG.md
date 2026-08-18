@@ -10,14 +10,18 @@ file to mention the current version.
 ### Added
 
 - **Stabilized manual Conversation Assist listening.** Each tap now creates one
-  recognizer session with an immutable session ID and explicit listening,
-  processing, TTS and idle ownership. Native terminal callbacks end the session;
-  errors return to a manually retryable idle state. Lifecycle traces include UTC
-  timestamps, state, session ID, platform status and Android error code where
-  available. VAD-driven stops, automatic restarts, retry backoff and recognition
-  mode switching are frozen. TTS uses one initialized engine and its real start,
-  completion, cancel and error callbacks. Generated Android manifests include
-  microphone, internet, recognition-service and TTS-service declarations.
+  recognizer session with an immutable session ID and explicit starting, ready,
+  speech, processing, stopping, TTS and idle ownership. Waiting is shown only
+  after native audio activity, and an eight-second startup watchdog cancels a
+  stalled start. Stop invalidates and cancels immediately from every active
+  state. Japanese and Korean app modes now configure installed `ja-JP` and
+  `ko-KR` recognizers per session; Japanese + Korean uses a logged, supported
+  single-language fallback because the current plugin exposes no native language
+  switching API. Lifecycle traces include UTC timestamps, state, session ID,
+  exact locale, platform status and Android error code where available.
+  VAD-driven stops, automatic restarts, retry backoff and recognition mode
+  switching remain frozen. Generated Android manifests include microphone,
+  internet, recognition-service and TTS-service declarations.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or
   correcting a situation with one thumb. Hold the trigger and drag to select in
   one continuous gesture, or tap to pin the menu open and browse it. Eight root

@@ -33,7 +33,15 @@ class SpeechToTextRecognitionService
   }
 
   Future<bool> _initializeOnce() async {
-    _logger.event(sessionId: 0, state: 'INITIALIZING', event: 'initialize');
+    _logger.event(
+      sessionId: 0,
+      state: 'INITIALIZING',
+      event: 'initialize',
+      details: const <String, Object?>{
+        'androidNoBluetooth': true,
+        'audioOwner': 'speech_to_text_only',
+      },
+    );
     _available = await _speech.initialize(
       debugLogging: true,
       finalTimeout: const Duration(seconds: 2),
@@ -51,7 +59,7 @@ class SpeechToTextRecognitionService
   }
 
   @override
-  Future<void> start({
+  Future<ConversationRecognitionStartInfo> start({
     required int sessionId,
     required ConversationInputLanguage language,
   }) async {
@@ -67,19 +75,31 @@ class SpeechToTextRecognitionService
       );
       throw StateError('Speech recognizer is already active.');
     }
-    final locale = await _localeFor(language);
     _activeSessionId = sessionId;
-    _logger.event(
-      sessionId: sessionId,
-      state: 'LISTENING',
-      event: 'listen_requested',
-      details: <String, Object?>{'locale': locale},
-    );
     try {
+      final config = await _recognitionConfigFor(language);
+      if (_activeSessionId != sessionId) {
+        throw StateError('Speech recognition start was cancelled.');
+      }
+      _logger.event(
+        sessionId: sessionId,
+        state: 'STARTING',
+        event: 'listen_requested',
+        details: <String, Object?>{
+          'languageMode': language.name,
+          'recognitionLanguage': config.localeId,
+          'normalizedBcp47': _canonicalLocale(config.localeId),
+          'strategy': config.strategy,
+          'languageDetectionSupported':
+              config.nativeLanguageDetectionSupported,
+          'languageSwitchingSupported':
+              config.nativeLanguageSwitchingSupported,
+        },
+      );
       await _speech.listen(
         onResult: (result) => _onResult(sessionId, result),
         onSoundLevelChange: (level) => _onSoundLevel(sessionId, level),
-        localeId: locale,
+        localeId: config.localeId,
         listenFor: const Duration(seconds: 55),
         pauseFor: const Duration(seconds: 3),
         partialResults: true,
@@ -87,6 +107,15 @@ class SpeechToTextRecognitionService
         onDevice: false,
         listenMode: ListenMode.dictation,
       );
+      _logger.event(
+        sessionId: sessionId,
+        state: 'STARTING',
+        event: 'listen_call_returned',
+        details: <String, Object?>{
+          'speechIsListening': _speech.isListening,
+        },
+      );
+      return config;
     } on Object catch (error) {
       if (_activeSessionId == sessionId) _activeSessionId = null;
       _logger.event(
@@ -99,26 +128,82 @@ class SpeechToTextRecognitionService
     }
   }
 
-  Future<String?> _localeFor(ConversationInputLanguage language) async {
-    final prefix = switch (language) {
-      ConversationInputLanguage.automatic => null,
-      ConversationInputLanguage.japanese => 'ja',
-      ConversationInputLanguage.korean => 'ko',
-      ConversationInputLanguage.english => 'en',
-    };
-    if (prefix == null) return null;
+  Future<ConversationRecognitionStartInfo> _recognitionConfigFor(
+    ConversationInputLanguage language,
+  ) async {
     final locales = await _speech.locales();
-    for (final locale in locales) {
-      if (locale.localeId.toLowerCase().startsWith(prefix)) {
-        return locale.localeId;
+    if (language == ConversationInputLanguage.automatic) {
+      final system = await _speech.systemLocale();
+      final systemLocale = system?.localeId;
+      if (systemLocale == null) {
+        throw UnsupportedError('The recognizer reported no system locale.');
       }
+      return ConversationRecognitionStartInfo(
+        requestedLanguage: language,
+        localeId: systemLocale,
+        strategy: 'device_system_locale',
+      );
     }
-    return switch (language) {
+    if (language == ConversationInputLanguage.both) {
+      final system = await _speech.systemLocale();
+      final systemPrefix = system == null
+          ? ''
+          : _canonicalLocale(system.localeId).split('-').first;
+      final preferred = systemPrefix == 'ko' ? 'ko-KR' : 'ja-JP';
+      final alternate = preferred == 'ko-KR' ? 'ja-JP' : 'ko-KR';
+      final selected = _supportedLocale(locales, preferred) ??
+          _supportedLocale(locales, alternate);
+      if (selected == null) {
+        throw UnsupportedError(
+          'Both mode needs an installed Japanese or Korean recognizer.',
+        );
+      }
+      return ConversationRecognitionStartInfo(
+        requestedLanguage: language,
+        localeId: selected,
+        strategy: 'both_safe_fallback_${_canonicalLocale(selected)}',
+        nativeLanguageDetectionSupported: false,
+        nativeLanguageSwitchingSupported: false,
+      );
+    }
+    final requested = switch (language) {
       ConversationInputLanguage.japanese => 'ja-JP',
       ConversationInputLanguage.korean => 'ko-KR',
       ConversationInputLanguage.english => 'en-US',
-      ConversationInputLanguage.automatic => null,
+      ConversationInputLanguage.automatic ||
+      ConversationInputLanguage.both => throw StateError('unreachable'),
     };
+    final selected = _supportedLocale(locales, requested);
+    if (selected == null) {
+      throw UnsupportedError(
+        'The installed recognizer does not support $requested.',
+      );
+    }
+    return ConversationRecognitionStartInfo(
+      requestedLanguage: language,
+      localeId: selected,
+      strategy: 'explicit_${_canonicalLocale(selected)}',
+    );
+  }
+
+  String? _supportedLocale(List<LocaleName> locales, String requested) {
+    final wanted = _canonicalLocale(requested);
+    for (final locale in locales) {
+      if (_canonicalLocale(locale.localeId) == wanted) return locale.localeId;
+    }
+    final prefix = wanted.split('-').first;
+    for (final locale in locales) {
+      if (_canonicalLocale(locale.localeId).split('-').first == prefix) {
+        return locale.localeId;
+      }
+    }
+    return null;
+  }
+
+  String _canonicalLocale(String locale) {
+    final pieces = locale.replaceAll('_', '-').split('-');
+    if (pieces.length < 2) return pieces.first.toLowerCase();
+    return '${pieces.first.toLowerCase()}-${pieces[1].toUpperCase()}';
   }
 
   void _onResult(int sessionId, SpeechRecognitionResult result) {
@@ -157,8 +242,8 @@ class SpeechToTextRecognitionService
     final terminal = status == 'done' || status == 'notListening';
     _logger.event(
       sessionId: sessionId,
-      state: terminal ? 'PROCESSING' : 'LISTENING',
-      event: 'status',
+      state: terminal ? 'PROCESSING' : 'STARTING',
+      event: 'plugin_status',
       details: <String, Object?>{'value': status},
     );
     _callbacks?.onStatus(sessionId, status);

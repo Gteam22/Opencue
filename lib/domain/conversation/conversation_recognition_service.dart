@@ -1,5 +1,21 @@
 import 'conversation_models.dart';
 
+class ConversationRecognitionStartInfo {
+  const ConversationRecognitionStartInfo({
+    required this.requestedLanguage,
+    required this.localeId,
+    required this.strategy,
+    this.nativeLanguageDetectionSupported = false,
+    this.nativeLanguageSwitchingSupported = false,
+  });
+
+  final ConversationInputLanguage requestedLanguage;
+  final String localeId;
+  final String strategy;
+  final bool nativeLanguageDetectionSupported;
+  final bool nativeLanguageSwitchingSupported;
+}
+
 typedef RecognitionResultCallback = void Function(
   int sessionId,
   String transcript,
@@ -31,7 +47,7 @@ abstract interface class ConversationRecognitionService {
 
   Future<bool> initialize(ConversationRecognitionCallbacks callbacks);
 
-  Future<void> start({
+  Future<ConversationRecognitionStartInfo> start({
     required int sessionId,
     required ConversationInputLanguage language,
   });
@@ -56,10 +72,15 @@ class NullConversationRecognitionService
       false;
 
   @override
-  Future<void> start({
+  Future<ConversationRecognitionStartInfo> start({
     required int sessionId,
     required ConversationInputLanguage language,
-  }) async {}
+  }) async =>
+      ConversationRecognitionStartInfo(
+        requestedLanguage: language,
+        localeId: 'unavailable',
+        strategy: 'unsupported',
+      );
 
   @override
   Future<void> stop({required int sessionId}) async {}

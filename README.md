@@ -153,9 +153,15 @@ Scan and manual recommendations working.
 
 OpenCue receives partial/final transcript events and confidence from the device
 service. It does not create an audio file or retain raw audio. Each tap owns one
-monotonic session ID. Partial text updates only the visible transcript; the
-provider's terminal status finalizes the turn through the same normalize,
-classify and cue pipeline used by a confirmed manual transcript. There are no
+monotonic session ID. The UI remains at **Starting listener** until the first
+native audio-level or result callback proves the recognizer's audio listener is
+active; only then can it say **Waiting for speech**. An eight-second startup
+watchdog cancels a session that never reaches that point. Partial text updates
+only the visible transcript; the provider's terminal status finalizes the turn
+through the same normalize, classify and cue pipeline used by a confirmed
+manual transcript. Stop immediately invalidates the session, calls recognizer
+cancel and returns the UI to idle; callbacks from that session are ignored.
+There are no
 VAD-driven stops, automatic recognizer restarts, retry timers or online/offline
 mode switching in this stabilized path. Optional TTS begins only after the
 recognizer is terminal and returns the app to an idle, manually retryable state.
@@ -163,6 +169,14 @@ Duplicate finals and low-value acknowledgments preserve the existing cues. A
 platform confidence of zero is treated as unavailable rather than as failed
 recognition. The last six finalized turns are memory-only context for follow-up
 turns.
+
+Japanese recognition selects an installed `ja-JP` locale and Korean selects an
+installed `ko-KR` locale for each new session. The current `speech_to_text`
+adapter does not expose Android language-detection/switching capability, so
+Japanese + Korean input uses a deliberate single-language fallback: the
+device's Korean recognizer when the device locale is Korean, otherwise Japanese,
+falling back to the other installed language if necessary. The exact locale and
+strategy appear in lifecycle logs and in the developer-mode status line.
 
 ### What the scan does and does not do
 
