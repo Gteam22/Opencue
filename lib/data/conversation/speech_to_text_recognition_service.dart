@@ -6,8 +6,8 @@ import '../../domain/conversation/conversation_models.dart';
 import '../../domain/conversation/conversation_recognition_service.dart';
 import '../../domain/conversation/conversation_speech_log.dart';
 
-/// Adapter over the platform speech recognizer. It receives transcript events
-/// only; OpenCue never creates or retains an audio recording.
+/// Adapter over the platform speech recognizer. It exposes transcripts and
+/// RMS levels to the controller; OpenCue never creates or retains raw audio.
 class SpeechToTextRecognitionService
     implements ConversationRecognitionService {
   SpeechToTextRecognitionService({
@@ -246,10 +246,14 @@ class SpeechToTextRecognitionService
       event: 'plugin_status',
       details: <String, Object?>{'value': status},
     );
-    _callbacks?.onStatus(sessionId, status);
+    // Release adapter ownership before notifying the controller. A terminal
+    // callback may synchronously schedule the next persistent Listen session;
+    // leaving the old token set until after that callback creates a false
+    // recognizer-busy rejection.
     if (terminal && _activeSessionId == sessionId) {
       _activeSessionId = null;
     }
+    _callbacks?.onStatus(sessionId, status);
   }
 
   void _onError(SpeechRecognitionError error) {

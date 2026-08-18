@@ -130,6 +130,8 @@ const Map<String, String> stringsEn = <String, String>{
   'assist.speaking': 'Speaking the primary response…',
   'assist.primaryReady': 'Primary response ready.',
   'assist.resuming': 'Resuming listening…',
+  'assist.capturingUtterance': 'Listening…',
+  'assist.finalizing': 'Finishing the utterance…',
   'assist.startListening': 'Start Listening',
   'assist.startingListener': 'Starting listener…',
   'assist.stop': 'Stop listening',

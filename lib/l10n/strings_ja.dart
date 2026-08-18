@@ -117,6 +117,8 @@ const Map<String, String> stringsJa = <String, String>{
   'assist.speaking': '最初の返答を読み上げています…',
   'assist.primaryReady': '最初の返答を表示しました。',
   'assist.resuming': '音声認識を再開しています…',
+  'assist.capturingUtterance': '聞き取っています…',
+  'assist.finalizing': '発話を確定しています…',
   'assist.startListening': '聞き取りを開始',
   'assist.startingListener': '音声認識を開始しています…',
   'assist.stop': '聞き取りを停止',

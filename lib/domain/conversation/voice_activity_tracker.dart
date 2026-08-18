@@ -28,6 +28,7 @@ class VoiceActivityTracker {
 
   bool get heardSpeech => _speechStartedAt != null;
   double? get noiseFloor => _noiseFloor;
+  DateTime? get speechStartedAt => _speechStartedAt;
 
   void reset() {
     _noiseFloor = null;
@@ -67,6 +68,15 @@ class VoiceActivityTracker {
       // Adapt slowly while waiting, without chasing a sudden voice peak.
       _noiseFloor = floor * 0.94 + smoothed * 0.06;
     }
+  }
+
+  /// Treats a native partial transcript as authoritative speech evidence.
+  /// This is a fallback for devices whose RMS scale is too compressed for
+  /// energy-only detection; the recognizer has already retained the lead-in.
+  void confirmSpeech(DateTime now) {
+    _voiceCandidateAt ??= now.subtract(preRollDuration);
+    _speechStartedAt ??= _voiceCandidateAt;
+    _lastVoiceAt = now;
   }
 
   bool shouldStop(DateTime now) {

@@ -50,4 +50,43 @@ class ConversationSpeechLogger {
       debugPrint(line);
     }
   }
+
+  void ui({
+    required String state,
+    required String event,
+    Map<String, Object?> details = const <String, Object?>{},
+  }) {
+    final fields = details.entries
+        .map((entry) => '${entry.key}=${entry.value ?? '-'}')
+        .join(' ');
+    final line = '${DateTime.now().toUtc().toIso8601String()} '
+        '[ListenUI] state=$state event=$event'
+        '${fields.isEmpty ? '' : ' $fields'}';
+    final target = sink;
+    if (target != null) {
+      target(line);
+    } else {
+      debugPrint(line);
+    }
+  }
+
+  void korean({
+    required int turnId,
+    required int sessionId,
+    required String event,
+    Map<String, Object?> details = const <String, Object?>{},
+  }) {
+    final fields = details.entries
+        .map((entry) => '${entry.key}=${entry.value ?? '-'}')
+        .join(' ');
+    final line = '${DateTime.now().toUtc().toIso8601String()} '
+        '[Korean] turn=$turnId session=$sessionId event=$event'
+        '${fields.isEmpty ? '' : ' $fields'}';
+    final target = sink;
+    if (target != null) {
+      target(line);
+    } else {
+      debugPrint(line);
+    }
+  }
 }

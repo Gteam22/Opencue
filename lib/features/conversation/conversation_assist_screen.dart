@@ -72,11 +72,7 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
   Future<void> _listen() async {
     final state = AppScope.read(context);
     FocusScope.of(context).unfocus();
-    if (_controller.listenModeActive) {
-      await _controller.stop();
-      return;
-    }
-    await _controller.start(
+    await _controller.toggleListenMode(
       library: state.lines,
       preferences: _preferences,
       speechController: state.speech,
@@ -287,6 +283,7 @@ class _ListenPanel extends StatelessWidget {
     final phase = controller.phase;
     final listenButtonEnabled =
         phase != ConversationAssistPhase.initializing &&
+            !controller.listenButtonTransitionLocked &&
             (listening ||
                 controller.speechState == ConversationSpeechState.idle);
     final status = switch (phase) {
@@ -298,6 +295,9 @@ class _ListenPanel extends StatelessWidget {
         strings.t('assist.waitingForSpeech'),
       ConversationAssistPhase.hearingSpeech =>
         strings.t('assist.hearingSpeech'),
+      ConversationAssistPhase.capturingUtterance =>
+        strings.t('assist.capturingUtterance'),
+      ConversationAssistPhase.finalizing => strings.t('assist.finalizing'),
       ConversationAssistPhase.understanding =>
         strings.t('assist.understanding'),
       ConversationAssistPhase.primaryReady => strings.t('assist.primaryReady'),
@@ -370,6 +370,8 @@ class _ListenPanel extends StatelessWidget {
                       ),
                   ],
                   if (phase == ConversationAssistPhase.hearingSpeech ||
+                      phase == ConversationAssistPhase.capturingUtterance ||
+                      phase == ConversationAssistPhase.finalizing ||
                       phase == ConversationAssistPhase.starting ||
                       phase == ConversationAssistPhase.understanding ||
                       phase == ConversationAssistPhase.resuming ||
