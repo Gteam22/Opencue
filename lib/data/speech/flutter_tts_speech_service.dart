@@ -19,12 +19,15 @@ import '../../domain/speech/speech_service.dart';
 /// silence rather than throwing.
 class FlutterTtsSpeechService implements SpeechService {
   FlutterTtsSpeechService() : _tts = FlutterTts() {
-    _tts.setStartHandler(() => _log('onStart'));
-    _tts.setCompletionHandler(() => _log('onDone'));
-    _tts.setCancelHandler(() => _log('onCancel'));
+    _tts.setStartHandler(() => _log('onStart', _activeIds));
+    _tts.setCompletionHandler(() => _log('onDone', _activeIds));
+    _tts.setCancelHandler(() => _log('onCancel', _activeIds));
     _tts.setErrorHandler((message) {
       _lastError = message.toString();
-      _log('onError', <String, Object?>{'message': message});
+      _log('onError', <String, Object?>{
+        ..._activeIds,
+        'message': message,
+      });
     });
     _ready = _initialize();
   }
@@ -32,6 +35,13 @@ class FlutterTtsSpeechService implements SpeechService {
   final FlutterTts _tts;
   late final Future<void> _ready;
   String? _lastError;
+  int? _activeTurnId;
+  int? _activeUtteranceId;
+
+  Map<String, Object?> get _activeIds => <String, Object?>{
+        'turn': _activeTurnId,
+        'utterance': _activeUtteranceId,
+      };
 
   Future<void> _initialize() async {
     _log('initialize');
@@ -101,22 +111,32 @@ class FlutterTtsSpeechService implements SpeechService {
     String text, {
     required String languageCode,
     double rate = 0.5,
+    int? turnId,
+    int? utteranceId,
   }) async {
     if (text.trim().isEmpty) return;
     await _ready;
+    _activeTurnId = turnId;
+    _activeUtteranceId = utteranceId;
     _lastError = null;
     _log('speak_requested', <String, Object?>{
+      ..._activeIds,
       'language': languageCode,
       'characters': text.length,
     });
-    await _tts.setLanguage(languageCode);
-    // flutter_tts rate is 0.0-1.0, natural around 0.5 on Android; the
-    // caller's value maps straight through, clamped for safety.
-    await _tts.setSpeechRate(rate.clamp(0.0, 1.0));
-    await _tts.speak(text);
-    final error = _lastError;
-    if (error != null) {
-      throw StateError('TTS failed: $error');
+    try {
+      await _tts.setLanguage(languageCode);
+      // flutter_tts rate is 0.0-1.0, natural around 0.5 on Android; the
+      // caller's value maps straight through, clamped for safety.
+      await _tts.setSpeechRate(rate.clamp(0.0, 1.0));
+      await _tts.speak(text);
+      final error = _lastError;
+      if (error != null) {
+        throw StateError('TTS failed: $error');
+      }
+    } finally {
+      _activeTurnId = null;
+      _activeUtteranceId = null;
     }
   }
 

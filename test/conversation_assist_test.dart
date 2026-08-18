@@ -687,6 +687,8 @@ void main() {
     classifier.complete('greeting', 0.9);
     await Future<void>.delayed(Duration.zero);
     expect(controller.speechState, ConversationSpeechState.idle);
+    expect(controller.listenModeActive, isFalse);
+    expect(recognition.startCount, 1);
   });
 
   test('an idle platform terminal callback returns to idle without restart',
@@ -865,9 +867,10 @@ void main() {
     speechService.finish();
     await Future<void>.delayed(const Duration(milliseconds: 180));
     expect(speechService.spoken, <String>['今はいないですよ。']);
-    expect(controller.listenModeActive, isFalse);
+    expect(controller.listenModeActive, isTrue);
     expect(controller.recognitionSuppressed, isFalse);
-    expect(recognition.startCount, 1);
+    expect(recognition.startCount, 2);
+    expect(controller.speechState, ConversationSpeechState.starting);
     expect(
       controller.history.any(
         (turn) => turn.speaker == ConversationSpeaker.user,
@@ -934,7 +937,7 @@ void main() {
     expect(controller.speechState, ConversationSpeechState.idle);
   });
 
-  test('TTS failure clears playback ownership and leaves manual retry usable',
+  test('TTS failure clears playback ownership and safely resumes listening',
       () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService()..throwOnSpeak = true;
@@ -957,9 +960,118 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 40));
 
     expect(speech.lastError, contains('TTS test failure'));
-    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(controller.speechState, ConversationSpeechState.starting);
     expect(controller.recognitionSuppressed, isFalse);
-    expect(recognition.startCount, 1);
+    expect(recognition.startCount, 2);
+  });
+
+  test('processing watchdog invalidates a hung turn and resumes once',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final classifier = DelayedSemanticClassifier();
+    final logs = <String>[];
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      semanticClassifier: classifier,
+      processingTimeoutDuration: const Duration(milliseconds: 25),
+      logger: ConversationSpeechLogger(sink: logs.add),
+    );
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+      autoSpeak: true,
+    );
+
+    recognition.result('分類結果が返らない発話', true, 0.8);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    expect(logs.any((line) => line.contains('PROCESSING_TIMEOUT')), isTrue);
+    expect(controller.speechState, ConversationSpeechState.starting);
+    expect(recognition.startCount, 2);
+    classifier.complete('greeting', 0.9);
+    await Future<void>.delayed(Duration.zero);
+    expect(recognition.startCount, 2);
+  });
+
+  test('Auto Speak setting changes apply without recreating controller',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService();
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    final lines = List<OpenerLine>.generate(
+      12,
+      (index) => OpenerLine(
+        id: 'toggle-reply-$index',
+        japaneseText: '今はいないですよ。$index',
+        topics: const <String>{'relationship_status'},
+      ),
+    );
+    await controller.start(
+      library: lines,
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
+    recognition.result('彼女はいますか？ 一回目', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(speechService.spoken, hasLength(1));
+    expect(recognition.startCount, 2);
+
+    controller.setAutoSpeak(false);
+    recognition.result('彼女はいますか？ 二回目', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(speechService.spoken, hasLength(1));
+    expect(controller.speechState, ConversationSpeechState.idle);
+
+    controller.setAutoSpeak(true);
+    await controller.start(
+      library: lines,
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
+    recognition.result('彼女はいますか？ 三回目', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(speechService.spoken, hasLength(2));
+    expect(recognition.startCount, 4);
+  });
+
+  test('10 consecutive primary TTS turns each speak once and resume',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService();
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    final lines = List<OpenerLine>.generate(
+      40,
+      (index) => OpenerLine(
+        id: 'cycle-reply-$index',
+        japaneseText: '今はいないですよ。$index',
+        topics: const <String>{'relationship_status'},
+      ),
+    );
+    await controller.start(
+      library: lines,
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
+
+    for (var turn = 0; turn < 10; turn++) {
+      recognition.result('彼女はいますか？ turn $turn', true, 0.9);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(speechService.spoken, hasLength(turn + 1));
+      expect(recognition.startCount, turn + 2);
+      expect(controller.listenModeActive, isTrue);
+    }
+    expect(speechService.turnIds.whereType<int>().toSet(), hasLength(10));
+    expect(speechService.utteranceIds.whereType<int>().toSet(), hasLength(10));
   });
 
   test('primary response is published before same-turn variants', () async {
@@ -1009,7 +1121,7 @@ void main() {
     );
   });
 
-  test('Korean output mode Auto Speaks Hangul and returns to idle',
+  test('Korean output mode Auto Speaks Hangul and resumes listening',
       () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService();
@@ -1034,8 +1146,8 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 320));
     expect(speechService.spoken, <String>['지금은 없어요.']);
     expect(speechService.languages, <String>[SpeechController.koreanLocale]);
-    expect(recognition.startCount, 1);
-    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(recognition.startCount, 2);
+    expect(controller.speechState, ConversationSpeechState.starting);
   });
 
   test('ten manual listen cycles use ten sessions with no hidden restart',
@@ -1331,6 +1443,8 @@ class FakeConversationRecognitionService
 class ControlledSpeechService implements SpeechService {
   final List<String> spoken = <String>[];
   final List<String> languages = <String>[];
+  final List<int?> turnIds = <int?>[];
+  final List<int?> utteranceIds = <int?>[];
   Completer<void>? _gate;
   bool throwOnSpeak = false;
 
@@ -1352,9 +1466,13 @@ class ControlledSpeechService implements SpeechService {
     String text, {
     required String languageCode,
     double rate = 0.5,
+    int? turnId,
+    int? utteranceId,
   }) async {
     spoken.add(text);
     languages.add(languageCode);
+    turnIds.add(turnId);
+    utteranceIds.add(utteranceId);
     if (throwOnSpeak) throw StateError('TTS test failure');
     final gate = _gate;
     if (gate != null) await gate.future;

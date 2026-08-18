@@ -300,7 +300,9 @@ class _ListenPanel extends StatelessWidget {
         strings.t('assist.hearingSpeech'),
       ConversationAssistPhase.understanding =>
         strings.t('assist.understanding'),
+      ConversationAssistPhase.primaryReady => strings.t('assist.primaryReady'),
       ConversationAssistPhase.speaking => strings.t('assist.speaking'),
+      ConversationAssistPhase.resuming => strings.t('assist.resuming'),
       ConversationAssistPhase.stopping => strings.t('assist.stopping'),
       ConversationAssistPhase.suggestions => strings.t('assist.readyAgain'),
       ConversationAssistPhase.noSpeech => strings.t('assist.noSpeech'),
@@ -370,6 +372,7 @@ class _ListenPanel extends StatelessWidget {
                   if (phase == ConversationAssistPhase.hearingSpeech ||
                       phase == ConversationAssistPhase.starting ||
                       phase == ConversationAssistPhase.understanding ||
+                      phase == ConversationAssistPhase.resuming ||
                       phase == ConversationAssistPhase.stopping ||
                       phase == ConversationAssistPhase.speaking) ...<Widget>[
                     const SizedBox(height: 8),

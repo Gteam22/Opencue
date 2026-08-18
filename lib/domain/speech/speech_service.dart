@@ -35,6 +35,8 @@ abstract interface class SpeechService {
     String text, {
     required String languageCode,
     double rate = 0.5,
+    int? turnId,
+    int? utteranceId,
   });
 
   /// Stops any current utterance immediately. Safe to call when nothing is
@@ -65,6 +67,8 @@ class NullSpeechService implements SpeechService {
     String text, {
     required String languageCode,
     double rate = 0.5,
+    int? turnId,
+    int? utteranceId,
   }) async {}
 
   @override

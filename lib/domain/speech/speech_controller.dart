@@ -103,12 +103,14 @@ class SpeechController extends ChangeNotifier {
     required String lineId,
     required String koreanText,
     double rate = 0.5,
+    int? turnId,
   }) =>
       _toggle(
         lineId: lineId,
         text: koreanText,
         languageCode: koreanLocale,
         rate: rate,
+        turnId: turnId,
       );
 
   /// Speaks exactly the Japanese field supplied by the line.
@@ -116,12 +118,14 @@ class SpeechController extends ChangeNotifier {
     required String lineId,
     required String japaneseText,
     double rate = 0.5,
+    int? turnId,
   }) =>
       _toggle(
         lineId: lineId,
         text: japaneseText,
         languageCode: japaneseLocale,
         rate: rate,
+        turnId: turnId,
       );
 
   Future<void> _toggle({
@@ -129,6 +133,7 @@ class SpeechController extends ChangeNotifier {
     required String text,
     required String languageCode,
     required double rate,
+    int? turnId,
   }) async {
     final speechText = sanitizer.sanitize(text);
     if (!_service.isSupported || speechText.isEmpty) return;
@@ -156,6 +161,8 @@ class SpeechController extends ChangeNotifier {
         speechText,
         languageCode: languageCode,
         rate: rate,
+        turnId: turnId,
+        utteranceId: generation,
       );
     } on Object catch (error) {
       if (generation == _generation) _lastError = '$error';

@@ -128,6 +128,8 @@ const Map<String, String> stringsEn = <String, String>{
       'The meaning was uncertain, so these are low-pressure fallback options.',
   'assist.sessionHistory': 'This session',
   'assist.speaking': 'Speaking the primary response…',
+  'assist.primaryReady': 'Primary response ready.',
+  'assist.resuming': 'Resuming listening…',
   'assist.startListening': 'Start Listening',
   'assist.startingListener': 'Starting listener…',
   'assist.stop': 'Stop listening',

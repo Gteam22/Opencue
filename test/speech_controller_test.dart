@@ -42,6 +42,8 @@ class FakeSpeechService implements SpeechService {
     String text, {
     required String languageCode,
     double rate = 0.5,
+    int? turnId,
+    int? utteranceId,
   }) async {
     spoken.add(text);
     languages.add(languageCode);
