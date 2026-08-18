@@ -15,7 +15,10 @@ file to mention the current version.
   transcripts, 700 ms end-of-turn silence, turn IDs that reject stale results,
   rolling incoming/selected-response context, persisted Auto Speak, and
   recognition suppression during TTS to prevent feedback loops. The primary
-  response is published before the same-intent reel variants.
+  response is published before the same-intent reel variants. Android
+  recognition transitions are serialized with bounded busy/network recovery;
+  generated manifests independently guarantee both microphone and internet
+  permissions, and network failures retry an installed offline recognizer.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or
   correcting a situation with one thumb. Hold the trigger and drag to select in
   one continuous gesture, or tap to pin the menu open and browse it. Eight root

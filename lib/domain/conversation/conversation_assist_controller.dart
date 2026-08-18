@@ -93,6 +93,7 @@ class ConversationAssistController extends ChangeNotifier {
   bool _koreanTtsEnabled = true;
   int _consecutiveClientErrors = 0;
   int _consecutiveBusyErrors = 0;
+  int _consecutiveNetworkErrors = 0;
   DateTime? _recognitionRetryNotBefore;
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
@@ -166,6 +167,7 @@ class ConversationAssistController extends ChangeNotifier {
     _finalizing = false;
     _consecutiveClientErrors = 0;
     _consecutiveBusyErrors = 0;
+    _consecutiveNetworkErrors = 0;
     _recognitionRetryNotBefore = null;
     _listenModeActive = true;
     _startVadTimer();
@@ -891,6 +893,7 @@ class ConversationAssistController extends ChangeNotifier {
     if (text.trim().isNotEmpty) {
       _consecutiveClientErrors = 0;
       _consecutiveBusyErrors = 0;
+      _consecutiveNetworkErrors = 0;
       _recognitionRetryNotBefore = null;
     }
     _confidence = confidence;
@@ -956,6 +959,20 @@ class ConversationAssistController extends ChangeNotifier {
       if (_consecutiveBusyErrors <= 4) {
         final backoff = Duration(
           milliseconds: 750 * (1 << (_consecutiveBusyErrors - 1)),
+        );
+        _recognitionRetryNotBefore = DateTime.now().add(backoff);
+        _errorMessage = null;
+        _setPhase(ConversationAssistPhase.waitingForSpeech);
+        _scheduleRecognitionRestart(delay: backoff);
+        return;
+      }
+    }
+    if (normalized.contains('error_network') && _listenModeActive) {
+      _recognizerActive = false;
+      _consecutiveNetworkErrors++;
+      if (_consecutiveNetworkErrors <= 3) {
+        final backoff = Duration(
+          seconds: 1 << (_consecutiveNetworkErrors - 1),
         );
         _recognitionRetryNotBefore = DateTime.now().add(backoff);
         _errorMessage = null;

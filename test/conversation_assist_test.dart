@@ -663,6 +663,27 @@ void main() {
     expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
   });
 
+  test('Android network recognition retries without dropping Listen Mode',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.error('error_network_retry_offline', permanent: false);
+    recognition.status('notListening');
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(recognition.startCount, 1);
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.errorMessage, isNull);
+
+    await Future<void>.delayed(const Duration(milliseconds: 780));
+    expect(recognition.startCount, 2);
+    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+  });
+
   test('Auto Speak suppresses self-voice and resumes recognition', () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService()..hold();

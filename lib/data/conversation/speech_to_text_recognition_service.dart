@@ -15,6 +15,7 @@ class SpeechToTextRecognitionService
   final SpeechToText _speech;
   ConversationRecognitionCallbacks? _callbacks;
   bool _available = false;
+  bool _useOnDeviceRecognition = false;
   Future<void>? _startInFlight;
   DateTime? _lastNativeReleaseAt;
 
@@ -85,7 +86,7 @@ class SpeechToTextRecognitionService
       // `error_client` when the requested JA/KO locale has no downloaded
       // on-device pack. The platform default can still choose an installed
       // offline engine, but also works with the device's normal recognizer.
-      onDevice: false,
+      onDevice: _useOnDeviceRecognition,
       listenMode: ListenMode.dictation,
     );
   }
@@ -121,6 +122,32 @@ class SpeechToTextRecognitionService
   }
 
   void _onError(SpeechRecognitionError error) {
+    final normalized = error.errorMsg.toLowerCase();
+    if (normalized.contains('error_network') &&
+        !_useOnDeviceRecognition) {
+      // The normal Android recognizer may be network-backed. Retry the next
+      // window with an installed offline language model when connectivity or
+      // INTERNET permission is unavailable.
+      _useOnDeviceRecognition = true;
+      _callbacks?.onError(
+        'error_network_retry_offline',
+        permanent: false,
+      );
+      return;
+    }
+    if (normalized.contains('error_client') &&
+        _useOnDeviceRecognition) {
+      // Forced offline mode reports error_client when this locale has no
+      // downloaded pack. Return to the platform recognizer for later retries
+      // and provide an actionable terminal message if no path is available.
+      _useOnDeviceRecognition = false;
+      _callbacks?.onError(
+        'Offline speech is unavailable. Connect to the internet or install '
+        'the selected offline speech language.',
+        permanent: true,
+      );
+      return;
+    }
     _callbacks?.onError(
       error.errorMsg,
       permanent: error.permanent,

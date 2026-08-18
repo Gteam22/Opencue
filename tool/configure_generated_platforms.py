@@ -14,13 +14,23 @@ def configure_android(root: Path) -> None:
         return
     text = manifest.read_text(encoding="utf-8")
     permissions = (
-        '    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n'
-        '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+        ("android.permission.RECORD_AUDIO", "RECORD_AUDIO"),
+        ("android.permission.INTERNET", "INTERNET"),
     )
-    if "android.permission.RECORD_AUDIO" not in text:
+    missing_permissions = [
+        short_name
+        for full_name, short_name in permissions
+        if full_name not in text
+    ]
+    if missing_permissions:
         manifest_start = text.find("<manifest")
         close = text.find(">", manifest_start)
-        text = text[: close + 1] + "\n" + permissions + text[close + 1 :]
+        additions = "".join(
+            '    <uses-permission android:name="android.permission.%s"/>\n'
+            % permission
+            for permission in missing_permissions
+        )
+        text = text[: close + 1] + "\n" + additions + text[close + 1 :]
     if "android.speech.RecognitionService" not in text:
         query = (
             "    <queries>\n"
