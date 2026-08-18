@@ -15,6 +15,7 @@ import '../lib/domain/conversation/conversation_interpreter.dart';
 import '../lib/domain/conversation/conversation_models.dart';
 import '../lib/domain/conversation/conversation_recognition_service.dart';
 import '../lib/domain/conversation/conversation_response_engine.dart';
+import '../lib/domain/conversation/conversation_speech_log.dart';
 import '../lib/domain/conversation/language_detector.dart';
 import '../lib/domain/conversation/semantic_intent_classifier.dart';
 import '../lib/domain/conversation/voice_activity_tracker.dart';
@@ -578,13 +579,14 @@ void main() {
 
     await controller.stop();
     expect(recognition.stopCount, 1);
-    expect(controller.phase, ConversationAssistPhase.idle);
+    expect(controller.phase, ConversationAssistPhase.noSpeech);
+    expect(controller.speechState, ConversationSpeechState.idle);
 
     await controller.close();
     expect(recognition.disposeCount, 1);
   });
 
-  test('an idle platform recognition window restarts without leaving mode',
+  test('an idle platform terminal callback returns to idle without restart',
       () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
@@ -594,13 +596,40 @@ void main() {
       preferences: const ConversationPreferences(),
     );
     recognition.status('done');
-    await Future<void>.delayed(const Duration(milliseconds: 160));
-    expect(controller.listenModeActive, isTrue);
-    expect(recognition.startCount, 2);
-    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.listenModeActive, isFalse);
+    expect(recognition.startCount, 1);
+    expect(controller.speechState, ConversationSpeechState.idle);
   });
 
-  test('Android error_client from an intentional stop is ignored', () async {
+  test('repeated taps while non-idle cannot create overlapping sessions',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    expect(recognition.startCount, 1);
+    expect(controller.activeRecognitionSessionId, 1);
+
+    recognition.status('done');
+    await Future<void>.delayed(Duration.zero);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    expect(recognition.startCount, 2);
+    expect(controller.activeRecognitionSessionId, 2);
+  });
+
+  test('Android error_client from stop is surfaced and remains retryable',
+      () async {
     final recognition = FakeConversationRecognitionService()
       ..errorClientOnStop = true;
     final controller = ConversationAssistController(recognition: recognition);
@@ -614,17 +643,16 @@ void main() {
       library: <OpenerLine>[reply],
       preferences: const ConversationPreferences(),
     );
-    recognition.result('彼女いますか？', true, 0.9);
-    await Future<void>.delayed(const Duration(milliseconds: 320));
+    await controller.stop();
 
-    expect(controller.errorMessage, isNull);
-    expect(controller.listenModeActive, isTrue);
-    expect(controller.result, isNotNull);
-    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
-    expect(recognition.startCount, 2);
+    expect(controller.errorMessage, 'error_client');
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.phase, ConversationAssistPhase.error);
+    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(recognition.startCount, 1);
   });
 
-  test('a spontaneous Android error_client gets a bounded retry', () async {
+  test('a spontaneous Android error_client never auto-retries', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
     addTearDown(controller.dispose);
@@ -633,14 +661,14 @@ void main() {
       preferences: const ConversationPreferences(),
     );
     recognition.error('error_client', permanent: true);
-    expect(controller.listenModeActive, isTrue);
-    expect(controller.errorMessage, isNull);
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.errorMessage, 'error_client');
     await Future<void>.delayed(const Duration(milliseconds: 450));
-    expect(recognition.startCount, 2);
-    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+    expect(recognition.startCount, 1);
+    expect(controller.speechState, ConversationSpeechState.idle);
   });
 
-  test('Android error_busy waits for native release before retrying',
+  test('Android error_busy returns to idle without a hidden retry',
       () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
@@ -650,20 +678,15 @@ void main() {
       preferences: const ConversationPreferences(),
     );
     recognition.error('error_busy', permanent: true);
-    // Android normally follows the error with notListening. That callback
-    // must not shorten the busy-specific cooldown.
     recognition.status('notListening');
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await Future<void>.delayed(const Duration(milliseconds: 900));
     expect(recognition.startCount, 1);
-    expect(controller.listenModeActive, isTrue);
-    expect(controller.errorMessage, isNull);
-
-    await Future<void>.delayed(const Duration(milliseconds: 560));
-    expect(recognition.startCount, 2);
-    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.errorMessage, 'error_busy');
+    expect(controller.speechState, ConversationSpeechState.idle);
   });
 
-  test('Android network recognition retries without dropping Listen Mode',
+  test('Android network errors return to idle without mode switching',
       () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
@@ -672,16 +695,40 @@ void main() {
       library: const <OpenerLine>[],
       preferences: const ConversationPreferences(),
     );
-    recognition.error('error_network_retry_offline', permanent: false);
+    recognition.error('error_network', permanent: false, platformCode: 2);
     recognition.status('notListening');
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
     expect(recognition.startCount, 1);
-    expect(controller.listenModeActive, isTrue);
-    expect(controller.errorMessage, isNull);
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.errorMessage, 'error_network');
+    expect(controller.speechState, ConversationSpeechState.idle);
+  });
 
-    await Future<void>.delayed(const Duration(milliseconds: 780));
+  test('no-match and permission errors are terminal and manually retryable',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.error('error_no_match', permanent: false, platformCode: 7);
+    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(recognition.startCount, 1);
+
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.error(
+      'error_insufficient_permissions',
+      permanent: true,
+      platformCode: 9,
+    );
+    expect(controller.phase, ConversationAssistPhase.permissionDenied);
+    expect(controller.speechState, ConversationSpeechState.idle);
     expect(recognition.startCount, 2);
-    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
   });
 
   test('Auto Speak suppresses self-voice and resumes recognition', () async {
@@ -714,9 +761,9 @@ void main() {
     speechService.finish();
     await Future<void>.delayed(const Duration(milliseconds: 180));
     expect(speechService.spoken, <String>['今はいないですよ。']);
-    expect(controller.listenModeActive, isTrue);
+    expect(controller.listenModeActive, isFalse);
     expect(controller.recognitionSuppressed, isFalse);
-    expect(recognition.startCount, 2);
+    expect(recognition.startCount, 1);
     expect(
       controller.history.any(
         (turn) => turn.speaker == ConversationSpeaker.user,
@@ -725,7 +772,7 @@ void main() {
     );
   });
 
-  test('manual response playback also pauses and resumes recognition',
+  test('manual response playback is rejected while recognition owns audio',
       () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService()..hold();
@@ -747,19 +794,17 @@ void main() {
       japaneseText: line.japaneseText,
     );
     await Future<void>.delayed(Duration.zero);
-    expect(controller.recognitionSuppressed, isTrue);
-    expect(recognition.cancelCount, 1);
-    recognition.result('そうですね', true, 0.9);
+    expect(controller.recognitionSuppressed, isFalse);
+    expect(recognition.cancelCount, 0);
+    expect(speechService.spoken, isEmpty);
     expect(controller.cueRevision, 0);
 
-    speechService.finish();
     await playback;
-    await Future<void>.delayed(const Duration(milliseconds: 160));
     expect(controller.recognitionSuppressed, isFalse);
-    expect(recognition.startCount, 2);
+    expect(recognition.startCount, 1);
   });
 
-  test('Auto Speak off never invokes TTS and still resumes listening',
+  test('Auto Speak off never invokes TTS and returns to idle',
       () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService();
@@ -780,8 +825,37 @@ void main() {
     recognition.result('彼女いますか？', true, 0.9);
     await Future<void>.delayed(const Duration(milliseconds: 320));
     expect(speechService.spoken, isEmpty);
-    expect(recognition.startCount, 2);
-    expect(controller.phase, ConversationAssistPhase.waitingForSpeech);
+    expect(recognition.startCount, 1);
+    expect(controller.phase, ConversationAssistPhase.suggestions);
+    expect(controller.speechState, ConversationSpeechState.idle);
+  });
+
+  test('TTS failure clears playback ownership and leaves manual retry usable',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService()..throwOnSpeak = true;
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'tts-failure-reply',
+      japaneseText: '今はいないですよ。',
+      topics: const <String>{'relationship_status'},
+    );
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
+    recognition.result('彼女いますか？', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(speech.lastError, contains('TTS test failure'));
+    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(controller.recognitionSuppressed, isFalse);
+    expect(recognition.startCount, 1);
   });
 
   test('primary response is published before same-turn variants', () async {
@@ -831,7 +905,7 @@ void main() {
     );
   });
 
-  test('Korean output mode Auto Speaks Hangul and resumes listening',
+  test('Korean output mode Auto Speaks Hangul and returns to idle',
       () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService();
@@ -856,10 +930,73 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 320));
     expect(speechService.spoken, <String>['지금은 없어요.']);
     expect(speechService.languages, <String>[SpeechController.koreanLocale]);
-    expect(recognition.startCount, 2);
+    expect(recognition.startCount, 1);
+    expect(controller.speechState, ConversationSpeechState.idle);
   });
 
-  test('recognition language changes apply to the next persistent session',
+  test('ten manual listen cycles use ten sessions with no hidden restart',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final logs = <String>[];
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      logger: ConversationSpeechLogger(sink: logs.add),
+    );
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'ten-cycle-reply',
+      japaneseText: '今はいないですよ。',
+      topics: const <String>{'relationship_status'},
+    );
+
+    for (var cycle = 1; cycle <= 10; cycle++) {
+      await controller.start(
+        library: <OpenerLine>[reply],
+        preferences: const ConversationPreferences(),
+      );
+      expect(controller.activeRecognitionSessionId, cycle);
+      recognition.result('彼女いますか？ $cycle', true, 0.9);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(controller.speechState, ConversationSpeechState.idle);
+      expect(controller.result, isNotNull);
+    }
+
+    expect(recognition.startCount, 10);
+    expect(recognition.stopCount, 0);
+    expect(recognition.cancelCount, 0);
+    expect(
+      recognition.sessionIds,
+      List<int>.generate(10, (index) => index + 1),
+    );
+    expect(
+      logs.where((line) => line.contains('event=tap_start')),
+      hasLength(10),
+    );
+  });
+
+  test('a late callback from an old session cannot mutate a newer session',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.status('done', sessionId: 1);
+    await Future<void>.delayed(Duration.zero);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+
+    recognition.result('古い結果', true, 0.9, sessionId: 1);
+    expect(controller.activeRecognitionSessionId, 2);
+    expect(controller.transcript, isEmpty);
+    expect(controller.speechState, ConversationSpeechState.listening);
+  });
+
+  test('recognition language changes apply to the next manual session',
       () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
@@ -955,6 +1092,8 @@ class FakeConversationRecognitionService
   int cancelCount = 0;
   int disposeCount = 0;
   bool errorClientOnStop = false;
+  int? currentSessionId;
+  final List<int> sessionIds = <int>[];
   final List<ConversationInputLanguage> languages =
       <ConversationInputLanguage>[];
 
@@ -968,32 +1107,67 @@ class FakeConversationRecognitionService
   }
 
   @override
-  Future<void> start({required ConversationInputLanguage language}) async {
+  Future<void> start({
+    required int sessionId,
+    required ConversationInputLanguage language,
+  }) async {
     started = true;
+    currentSessionId = sessionId;
     startCount++;
+    sessionIds.add(sessionId);
     languages.add(language);
   }
 
-  void result(String text, bool finalResult, double confidence) {
-    callbacks!.onResult(text, finalResult, confidence);
+  void result(
+    String text,
+    bool finalResult,
+    double confidence, {
+    int? sessionId,
+  }) {
+    final resolvedSessionId = sessionId ?? currentSessionId!;
+    callbacks!.onResult(
+      resolvedSessionId,
+      text,
+      finalResult,
+      confidence,
+    );
+    if (finalResult) callbacks!.onStatus(resolvedSessionId, 'done');
   }
 
-  void status(String status) => callbacks!.onStatus(status);
+  void status(String status, {int? sessionId}) =>
+      callbacks!.onStatus(sessionId ?? currentSessionId!, status);
 
-  void error(String message, {required bool permanent}) =>
-      callbacks!.onError(message, permanent: permanent);
+  void error(
+    String message, {
+    required bool permanent,
+    int? sessionId,
+    int? platformCode,
+  }) =>
+      callbacks!.onError(
+        sessionId ?? currentSessionId!,
+        message,
+        permanent: permanent,
+        platformCode: platformCode,
+      );
 
   @override
-  Future<void> stop() async {
+  Future<void> stop({required int sessionId}) async {
     started = false;
     stopCount++;
     if (errorClientOnStop) {
-      callbacks!.onError('error_client', permanent: true);
+      callbacks!.onError(
+        sessionId,
+        'error_client',
+        permanent: true,
+        platformCode: 5,
+      );
+    } else {
+      callbacks!.onStatus(sessionId, 'done');
     }
   }
 
   @override
-  Future<void> cancel() async {
+  Future<void> cancel({required int sessionId}) async {
     started = false;
     cancelCount++;
   }
@@ -1009,6 +1183,7 @@ class ControlledSpeechService implements SpeechService {
   final List<String> spoken = <String>[];
   final List<String> languages = <String>[];
   Completer<void>? _gate;
+  bool throwOnSpeak = false;
 
   @override
   bool get isSupported => true;
@@ -1031,6 +1206,7 @@ class ControlledSpeechService implements SpeechService {
   }) async {
     spoken.add(text);
     languages.add(languageCode);
+    if (throwOnSpeak) throw StateError('TTS test failure');
     final gate = _gate;
     if (gate != null) await gate.future;
   }

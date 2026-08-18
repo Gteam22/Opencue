@@ -31,17 +31,29 @@ def configure_android(root: Path) -> None:
             for permission in missing_permissions
         )
         text = text[: close + 1] + "\n" + additions + text[close + 1 :]
+    query_actions = []
     if "android.speech.RecognitionService" not in text:
-        query = (
-            "    <queries>\n"
+        query_actions.append("android.speech.RecognitionService")
+    if "android.intent.action.TTS_SERVICE" not in text:
+        # Android 11 package visibility: flutter_tts cannot reliably discover
+        # installed engines unless the generated app declares this query.
+        query_actions.append("android.intent.action.TTS_SERVICE")
+    if query_actions:
+        intents = "".join(
             "        <intent>\n"
-            '            <action android:name="android.speech.RecognitionService"/>\n'
+            f'            <action android:name="{action}"/>\n'
             "        </intent>\n"
-            "    </queries>\n"
+            for action in query_actions
         )
-        application = text.find("<application")
-        application_line = text.rfind("\n", 0, application) + 1
-        text = text[:application_line] + query + text[application_line:]
+        if "</queries>" in text:
+            text = text.replace(
+                "    </queries>", intents + "    </queries>", 1
+            )
+        else:
+            query = "    <queries>\n" + intents + "    </queries>\n"
+            application = text.find("<application")
+            application_line = text.rfind("\n", 0, application) + 1
+            text = text[:application_line] + query + text[application_line:]
     manifest.write_text(text, encoding="utf-8")
 
 

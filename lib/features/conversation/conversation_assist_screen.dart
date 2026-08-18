@@ -280,6 +280,8 @@ class _ListenPanel extends StatelessWidget {
     final strings = AppScope.strings(context);
     final theme = Theme.of(context);
     final listening = controller.isListening;
+    final listenButtonEnabled = listening ||
+        controller.speechState == ConversationSpeechState.idle;
     final phase = controller.phase;
     final status = switch (phase) {
       ConversationAssistPhase.idle => strings.t('assist.ready'),
@@ -310,9 +312,7 @@ class _ListenPanel extends StatelessWidget {
               height: 64,
               child: FilledButton(
                 key: const Key('assist-listen'),
-                onPressed: phase == ConversationAssistPhase.initializing
-                    ? null
-                    : onToggle,
+                onPressed: listenButtonEnabled ? onToggle : null,
                 style: FilledButton.styleFrom(
                   shape: const CircleBorder(),
                   padding: EdgeInsets.zero,
@@ -410,7 +410,7 @@ class _InputLanguageControl extends StatelessWidget {
                   child: Text(strings.t('assist.language.${value.name}')),
                 ),
             ],
-            onChanged: controller.isListening
+            onChanged: controller.speechState != ConversationSpeechState.idle
                 ? null
                 : (value) {
                     if (value != null) controller.setInputLanguage(value);

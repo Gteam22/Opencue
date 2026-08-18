@@ -4,91 +4,99 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../domain/conversation/conversation_models.dart';
 import '../../domain/conversation/conversation_recognition_service.dart';
+import '../../domain/conversation/conversation_speech_log.dart';
 
 /// Adapter over the platform speech recognizer. It receives transcript events
 /// only; OpenCue never creates or retains an audio recording.
 class SpeechToTextRecognitionService
     implements ConversationRecognitionService {
-  SpeechToTextRecognitionService({SpeechToText? speech})
-      : _speech = speech ?? SpeechToText();
+  SpeechToTextRecognitionService({
+    SpeechToText? speech,
+    ConversationSpeechLogger logger = const ConversationSpeechLogger(),
+  })  : _speech = speech ?? SpeechToText(),
+        _logger = logger;
 
   final SpeechToText _speech;
+  final ConversationSpeechLogger _logger;
   ConversationRecognitionCallbacks? _callbacks;
   bool _available = false;
-  bool _useOnDeviceRecognition = false;
-  Future<void>? _startInFlight;
-  DateTime? _lastNativeReleaseAt;
-
-  static const Duration _nativeReleaseDelay =
-      Duration(milliseconds: 700);
+  int? _activeSessionId;
+  Future<bool>? _initializeFuture;
 
   @override
   bool get isSupported => _available;
 
   @override
-  Future<bool> initialize(ConversationRecognitionCallbacks callbacks) async {
+  Future<bool> initialize(ConversationRecognitionCallbacks callbacks) {
     _callbacks = callbacks;
+    return _initializeFuture ??= _initializeOnce();
+  }
+
+  Future<bool> _initializeOnce() async {
+    _logger.event(sessionId: 0, state: 'INITIALIZING', event: 'initialize');
     _available = await _speech.initialize(
-      finalTimeout: const Duration(milliseconds: 700),
+      debugLogging: true,
+      finalTimeout: const Duration(seconds: 2),
       options: <SpeechConfigOption>[SpeechToText.androidNoBluetooth],
-      onStatus: callbacks.onStatus,
+      onStatus: _onStatus,
       onError: _onError,
+    );
+    _logger.event(
+      sessionId: 0,
+      state: _available ? 'IDLE' : 'ERROR',
+      event: 'initialize_complete',
+      details: <String, Object?>{'available': _available},
     );
     return _available;
   }
 
   @override
-  Future<void> start({required ConversationInputLanguage language}) async {
-    final inFlight = _startInFlight;
-    if (inFlight != null) {
-      await inFlight;
-      if (_speech.isListening) return;
-    }
-    final start = _startSafely(language);
-    _startInFlight = start;
-    try {
-      await start;
-    } finally {
-      if (identical(_startInFlight, start)) _startInFlight = null;
-    }
-  }
-
-  Future<void> _startSafely(ConversationInputLanguage language) async {
+  Future<void> start({
+    required int sessionId,
+    required ConversationInputLanguage language,
+  }) async {
     if (!_available || _callbacks == null) {
       throw StateError('Speech recognition is not available.');
     }
-    // Android's SpeechRecognizer releases asynchronously. Starting a new
-    // session immediately after stop/cancel produces ERROR_RECOGNIZER_BUSY,
-    // even though the previous Future has completed.
-    if (_speech.isListening) {
-      await _speech.cancel();
-      _lastNativeReleaseAt = DateTime.now();
+    if (_activeSessionId != null || _speech.isListening) {
+      _logger.event(
+        sessionId: sessionId,
+        state: 'ERROR',
+        event: 'start_rejected_busy',
+        details: <String, Object?>{'activeSession': _activeSessionId},
+      );
+      throw StateError('Speech recognizer is already active.');
     }
-    final releasedAt = _lastNativeReleaseAt;
-    if (releasedAt != null) {
-      final elapsed = DateTime.now().difference(releasedAt);
-      if (elapsed < _nativeReleaseDelay) {
-        await Future<void>.delayed(_nativeReleaseDelay - elapsed);
-      }
-    }
-    await _speech.listen(
-      onResult: _onResult,
-      onSoundLevelChange: _callbacks!.onSoundLevel,
-      localeId: await _localeFor(language),
-      // OpenCue restarts the platform recognizer whenever its operating-system
-      // window closes. Keeping it alive for a longer window avoids the former
-      // tap-and-record feel while still respecting platform limits.
-      listenFor: const Duration(seconds: 55),
-      pauseFor: const Duration(milliseconds: 800),
-      partialResults: true,
-      cancelOnError: true,
-      // Do not force Android's offline recognizer. Many devices report
-      // `error_client` when the requested JA/KO locale has no downloaded
-      // on-device pack. The platform default can still choose an installed
-      // offline engine, but also works with the device's normal recognizer.
-      onDevice: _useOnDeviceRecognition,
-      listenMode: ListenMode.dictation,
+    final locale = await _localeFor(language);
+    _activeSessionId = sessionId;
+    _logger.event(
+      sessionId: sessionId,
+      state: 'LISTENING',
+      event: 'listen_requested',
+      details: <String, Object?>{'locale': locale},
     );
+    try {
+      await _speech.listen(
+        onResult: (result) => _onResult(sessionId, result),
+        onSoundLevelChange: (level) => _onSoundLevel(sessionId, level),
+        localeId: locale,
+        listenFor: const Duration(seconds: 55),
+        pauseFor: const Duration(seconds: 3),
+        partialResults: true,
+        cancelOnError: true,
+        onDevice: false,
+        listenMode: ListenMode.dictation,
+      );
+    } on Object catch (error) {
+      if (_activeSessionId == sessionId) _activeSessionId = null;
+      _logger.event(
+        sessionId: sessionId,
+        state: 'ERROR',
+        event: 'listen_failed',
+        details: <String, Object?>{'message': error},
+      );
+      rethrow;
+    }
   }
 
   Future<String?> _localeFor(ConversationInputLanguage language) async {
@@ -113,78 +121,127 @@ class SpeechToTextRecognitionService
     };
   }
 
-  void _onResult(SpeechRecognitionResult result) {
+  void _onResult(int sessionId, SpeechRecognitionResult result) {
+    if (_activeSessionId != sessionId) return;
+    _logger.event(
+      sessionId: sessionId,
+      state: result.finalResult ? 'PROCESSING' : 'LISTENING',
+      event: result.finalResult ? 'final_result' : 'partial_result',
+      details: <String, Object?>{
+        'confidence': result.confidence,
+        'characters': result.recognizedWords.length,
+      },
+    );
     _callbacks?.onResult(
+      sessionId,
       result.recognizedWords,
       result.finalResult,
       result.confidence,
     );
   }
 
+  void _onSoundLevel(int sessionId, double level) {
+    if (_activeSessionId != sessionId) return;
+    _logger.event(
+      sessionId: sessionId,
+      state: 'LISTENING',
+      event: 'sound_level',
+      details: <String, Object?>{'level': level},
+    );
+    _callbacks?.onSoundLevel(sessionId, level);
+  }
+
+  void _onStatus(String status) {
+    final sessionId = _activeSessionId;
+    if (sessionId == null) return;
+    final terminal = status == 'done' || status == 'notListening';
+    _logger.event(
+      sessionId: sessionId,
+      state: terminal ? 'PROCESSING' : 'LISTENING',
+      event: 'status',
+      details: <String, Object?>{'value': status},
+    );
+    _callbacks?.onStatus(sessionId, status);
+    if (terminal && _activeSessionId == sessionId) {
+      _activeSessionId = null;
+    }
+  }
+
   void _onError(SpeechRecognitionError error) {
-    final normalized = error.errorMsg.toLowerCase();
-    if (normalized.contains('error_network') &&
-        !_useOnDeviceRecognition) {
-      // The normal Android recognizer may be network-backed. Retry the next
-      // window with an installed offline language model when connectivity or
-      // INTERNET permission is unavailable.
-      _useOnDeviceRecognition = true;
-      _callbacks?.onError(
-        'error_network_retry_offline',
-        permanent: false,
-      );
-      return;
-    }
-    if (normalized.contains('error_client') &&
-        _useOnDeviceRecognition) {
-      // Forced offline mode reports error_client when this locale has no
-      // downloaded pack. Return to the platform recognizer for later retries
-      // and provide an actionable terminal message if no path is available.
-      _useOnDeviceRecognition = false;
-      _callbacks?.onError(
-        'Offline speech is unavailable. Connect to the internet or install '
-        'the selected offline speech language.',
-        permanent: true,
-      );
-      return;
-    }
+    final sessionId = _activeSessionId;
+    if (sessionId == null) return;
+    final platformCode = _androidErrorCode(error.errorMsg);
+    _logger.event(
+      sessionId: sessionId,
+      state: 'ERROR',
+      event: 'recognition_error',
+      details: <String, Object?>{
+        'message': error.errorMsg,
+        'platformCode': platformCode,
+        'permanent': error.permanent,
+      },
+    );
     _callbacks?.onError(
+      sessionId,
       error.errorMsg,
       permanent: error.permanent,
+      platformCode: platformCode,
     );
+    if (_activeSessionId == sessionId) _activeSessionId = null;
+  }
+
+  int? _androidErrorCode(String message) {
+    final value = message.toLowerCase();
+    const codes = <String, int>{
+      'error_network_timeout': 1,
+      'error_network': 2,
+      'error_audio': 3,
+      'error_server': 4,
+      'error_client': 5,
+      'error_speech_timeout': 6,
+      'error_no_match': 7,
+      'error_busy': 8,
+      'error_insufficient_permissions': 9,
+      'error_too_many_requests': 10,
+      'error_server_disconnected': 11,
+      'error_language_not_supported': 12,
+      'error_language_unavailable': 13,
+    };
+    for (final entry in codes.entries) {
+      if (value.contains(entry.key)) return entry.value;
+    }
+    final numeric = RegExp(r'\((\d+)\)').firstMatch(value);
+    if (numeric != null) return int.tryParse(numeric.group(1)!);
+    return null;
   }
 
   @override
-  Future<void> stop() async {
-    final start = _startInFlight;
-    if (start != null) {
-      try {
-        await start;
-      } on Object {
-        // The caller is already stopping; preserve the stop operation.
-      }
-    }
+  Future<void> stop({required int sessionId}) async {
+    if (_activeSessionId != sessionId) return;
+    _logger.event(
+      sessionId: sessionId,
+      state: 'LISTENING',
+      event: 'stop_requested',
+    );
     await _speech.stop();
-    _lastNativeReleaseAt = DateTime.now();
   }
 
   @override
-  Future<void> cancel() async {
-    final start = _startInFlight;
-    if (start != null) {
-      try {
-        await start;
-      } on Object {
-        // The caller is already cancelling; preserve the cancel operation.
-      }
-    }
+  Future<void> cancel({required int sessionId}) async {
+    if (_activeSessionId != sessionId) return;
+    _logger.event(
+      sessionId: sessionId,
+      state: 'LISTENING',
+      event: 'cancel_requested',
+    );
     await _speech.cancel();
-    _lastNativeReleaseAt = DateTime.now();
+    if (_activeSessionId == sessionId) _activeSessionId = null;
   }
 
   @override
   Future<void> dispose() async {
-    await cancel();
+    final sessionId = _activeSessionId;
+    if (sessionId != null) await cancel(sessionId: sessionId);
     _callbacks = null;
   }
 }

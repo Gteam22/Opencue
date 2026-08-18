@@ -28,10 +28,12 @@ class SpeechController extends ChangeNotifier {
   bool _checkedJapanese = false;
   bool _koreanAvailable = false;
   bool _checkedKorean = false;
+  String? _lastError;
 
   /// A monotonic token so a slow availability check or a completed utterance
   /// from a previous request cannot clear the state of a newer one.
   int _generation = 0;
+  bool Function()? _playbackGuard;
 
   /// Whether the platform can speak at all. False on Windows' no-op service, so
   /// the UI hides speech controls entirely.
@@ -40,6 +42,7 @@ class SpeechController extends ChangeNotifier {
   /// The line currently speaking, or null. A button compares its own line id
   /// to this to decide whether to show the speaking indicator.
   String? get speakingLineId => _speakingLineId;
+  String? get lastError => _lastError;
 
   String? get speakingLanguageCode {
     final key = _speakingKey;
@@ -52,6 +55,10 @@ class SpeechController extends ChangeNotifier {
 
   bool isSpeakingLanguage(String lineId, String languageCode) =>
       _speakingKey == '$languageCode:$lineId';
+
+  /// Installs an audio-ownership check used by Listen Mode. Returning false
+  /// rejects playback before the platform TTS engine is called.
+  void setPlaybackGuard(bool Function()? guard) => _playbackGuard = guard;
 
   bool? get japaneseAvailable =>
       _checkedJapanese ? _japaneseAvailable : null;
@@ -125,6 +132,7 @@ class SpeechController extends ChangeNotifier {
   }) async {
     final speechText = sanitizer.sanitize(text);
     if (!_service.isSupported || speechText.isEmpty) return;
+    if (_playbackGuard?.call() == false) return;
 
     final speakingKey = '$languageCode:$lineId';
 
@@ -137,12 +145,21 @@ class SpeechController extends ChangeNotifier {
     // Starting a new line supersedes any previous one.
     final generation = ++_generation;
     await _service.stop();
+    _lastError = null;
 
     _speakingLineId = lineId;
     _speakingKey = speakingKey;
     notifyListeners();
 
-    await _service.speak(speechText, languageCode: languageCode, rate: rate);
+    try {
+      await _service.speak(
+        speechText,
+        languageCode: languageCode,
+        rate: rate,
+      );
+    } on Object catch (error) {
+      if (generation == _generation) _lastError = '$error';
+    }
 
     // Only clear if no newer request has come in while this one was speaking.
     if (generation == _generation && _speakingKey == speakingKey) {

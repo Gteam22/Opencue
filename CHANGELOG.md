@@ -9,16 +9,15 @@ file to mention the current version.
 
 ### Added
 
-- **Persistent Conversation Assist Listen Mode.** One Start/Stop toggle now
-  drives an automatic waiting → speech → finalized turn → response → optional
-  TTS → waiting loop. It includes adaptive ambient-noise VAD, streaming partial
-  transcripts, 700 ms end-of-turn silence, turn IDs that reject stale results,
-  rolling incoming/selected-response context, persisted Auto Speak, and
-  recognition suppression during TTS to prevent feedback loops. The primary
-  response is published before the same-intent reel variants. Android
-  recognition transitions are serialized with bounded busy/network recovery;
-  generated manifests independently guarantee both microphone and internet
-  permissions, and network failures retry an installed offline recognizer.
+- **Stabilized manual Conversation Assist listening.** Each tap now creates one
+  recognizer session with an immutable session ID and explicit listening,
+  processing, TTS and idle ownership. Native terminal callbacks end the session;
+  errors return to a manually retryable idle state. Lifecycle traces include UTC
+  timestamps, state, session ID, platform status and Android error code where
+  available. VAD-driven stops, automatic restarts, retry backoff and recognition
+  mode switching are frozen. TTS uses one initialized engine and its real start,
+  completion, cancel and error callbacks. Generated Android manifests include
+  microphone, internet, recognition-service and TTS-service declarations.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or
   correcting a situation with one thumb. Hold the trigger and drag to select in
   one continuous gesture, or tap to pin the menu open and browse it. Eight root

@@ -1,15 +1,9 @@
 name: Build Windows installer
 
-# Runs on demand, on pushes to the main branch, on pull requests, and on version
-# tags. Only a tag attaches the installer to a GitHub Release; every other run
-# leaves it as a downloadable artifact.
+# Manual diagnostic build. Build everything is the sole workflow triggered by
+# pushes to main, preventing duplicate Windows runs for one commit.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    tags: ['v*.*.*']
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
