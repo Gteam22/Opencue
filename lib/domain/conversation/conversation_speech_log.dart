@@ -108,23 +108,4 @@ class ConversationSpeechLogger {
       debugPrint(line);
     }
   }
-
-  void vad({
-    required int sessionId,
-    required String event,
-    Map<String, Object?> details = const <String, Object?>{},
-  }) {
-    final fields = details.entries
-        .map((entry) => '${entry.key}=${entry.value ?? '-'}')
-        .join(' ');
-    final line = '${DateTime.now().toUtc().toIso8601String()} '
-        '[VAD] session=$sessionId event=$event'
-        '${fields.isEmpty ? '' : ' $fields'}';
-    final target = sink;
-    if (target != null) {
-      target(line);
-    } else {
-      debugPrint(line);
-    }
-  }
 }
