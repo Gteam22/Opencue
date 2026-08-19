@@ -1,8 +1,8 @@
 # OpenCue
 
 A multilingual conversation assistant and curated Japanese/Korean line library.
-Tap **Listen** for one conversational turn and OpenCue transcribes it, detects
-Japanese, Korean or English, then suggests three
+Tap **Listen** once and OpenCue keeps a foreground conversation loop active: it
+transcribes each turn, detects Japanese, Korean or English, then suggests three
 relevant replies in your chosen output-language mode. Manual situation
 recommendations and the environmental Scan remain available as secondary tools.
 
@@ -11,8 +11,9 @@ recommendation engine. You describe the situation you are actually in, and
 OpenCue suggests a few lines that fit it — or tells you that this is probably not
 a good moment to say anything.
 
-There is no account or OpenCue server. Listening runs only for the manual
-session started by a tap, and OpenCue never writes raw microphone audio to disk. The
+There is no account or OpenCue server. Listening runs only while the foreground
+Listen Mode started by a tap remains enabled, and OpenCue never writes raw
+microphone audio to disk. The
 operating-system speech service decides whether recognition is local or uses
 its configured provider. Camera access is confined to the optional Scan tool.
 
@@ -24,7 +25,7 @@ its configured provider. Camera access is confined to the optional Scan tool.
 
 - Holds a library of openers, each with the Japanese line and its English
   meaning, plus the situations it suits and the situations it does not.
-- Transcribes one incoming utterance for each manual Listen tap and
+- Transcribes incoming utterances until you stop Listen Mode and
   ranks approximately three library-backed replies by meaning, topic, usage
   type, tone and the user's manually selected boldness.
 - Lets you describe where you are and what you can see, and returns up to three
@@ -42,9 +43,10 @@ its configured provider. Camera access is confined to the optional Scan tool.
 - It never guarantees a reception, and it does not score or rate other people.
 - It stores nothing about anyone's appearance, availability, or interest — only
   the situation you typed in.
-- It never listens in the background. One tap starts exactly one recognition
-  session; a final result, terminal status, error, cancel or leaving the screen
-  releases it. The transient transcript history is cleared with the screen.
+- It never listens in the background. One tap enables foreground Listen Mode;
+  each utterance owns a separate recognition session, and Stop or leaving the
+  screen releases it. The transient transcript history is cleared with the
+  screen.
 - Adult suggestions are off by default and never activate from time, place,
   proximity or alcohol. They require explicit opt-in and a manual boldness
   limit.
@@ -152,8 +154,8 @@ installed offline recognizer. Declining leaves transcript typing, the library,
 Scan and manual recommendations working.
 
 OpenCue receives partial/final transcript events and confidence from the device
-service. It does not create an audio file or retain raw audio. Each tap owns one
-monotonic session ID. The UI remains at **Starting listener** until the first
+service. It does not create an audio file or retain raw audio. Each recognizer
+turn owns one monotonic session ID. The UI remains at **Starting listener** until the first
 native audio-level or result callback proves the recognizer's audio listener is
 active; only then can it say **Waiting for speech**. An eight-second startup
 watchdog cancels a session that never reaches that point. Partial text updates
@@ -161,10 +163,11 @@ only the visible transcript; the provider's terminal status finalizes the turn
 through the same normalize, classify and cue pipeline used by a confirmed
 manual transcript. Stop immediately invalidates the session, calls recognizer
 cancel and returns the UI to idle; callbacks from that session are ignored.
-There are no
-VAD-driven stops, automatic recognizer restarts, retry timers or online/offline
-mode switching in this stabilized path. Optional TTS begins only after the
-recognizer is terminal and returns the app to an idle, manually retryable state.
+Optional TTS begins only after the recognizer is terminal. When playback ends,
+the app gives the audio session a short release interval and rearms a fresh
+recognizer turn without requiring another tap. The microphone and TTS never own
+audio at the same time. A failed rearm receives one bounded retry; the app does
+not switch recognition modes behind the user's back.
 Duplicate finals and low-value acknowledgments preserve the existing cues. A
 platform confidence of zero is treated as unavailable rather than as failed
 recognition. The last six finalized turns are memory-only context for follow-up
@@ -288,20 +291,22 @@ is production-ready.
 | `camera` | The Flutter team's own plugin, and the only one with a first-party Windows implementation, so declaring it does not put the desktop build at risk. |
 | `google_mlkit_image_labeling` | On-device labelling from the maintained `flutter-ml` wrapper, not the deprecated Firebase ML APIs. **Labelling only** — no face detection, no object detection, no OCR — because "what kind of place is this" is the only question asked. |
 | `permission_handler` | Distinguishes *denied* from *permanently denied*, which the camera plugin cannot, and which the two permission screens depend on. |
-| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for one manual session per tap, partial/final results, sound-level events and JA/KO/EN locale selection. OpenCue stores no audio and does not force an unavailable Android offline language pack. |
+| `speech_to_text` | Wraps Android/iOS/Windows platform speech recognition for isolated turns within foreground Listen Mode, partial/final results, sound-level events and JA/KO/EN locale selection. OpenCue stores no audio and does not force an unavailable Android offline language pack. |
 | `sqflite` | The Android SQLite implementation. Same `sqflite_common` API as the desktop FFI build, so no repository code differs. |
 
 ### Conversation Assist pipeline
 
 ```text
-Listen tap -> one session ID -> streaming partial text -> native terminal status
+Listen tap -> Listen Mode ON -> one session ID -> streaming partial text
+            -> native terminal status
             -> finalized utterance + monotonic turn ID
             -> script language detection (JA / KO / EN)
             -> multilingual intent + rolling conversation context
             -> adult/boldness safety filter
             -> primary curated-library response -> display / optional TTS
             -> same-intent Standard / Humorous / Flirty variants
-            -> optional TTS completion -> IDLE (next session requires a tap)
+            -> optional TTS completion -> audio release -> fresh listener
+            -> repeat until Stop
 ```
 
 `ConversationRecognitionService` isolates platform capture, and

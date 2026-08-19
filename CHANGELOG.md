@@ -9,19 +9,19 @@ file to mention the current version.
 
 ### Added
 
-- **Stabilized manual Conversation Assist listening.** Each tap now creates one
-  recognizer session with an immutable session ID and explicit starting, ready,
-  speech, processing, stopping, TTS and idle ownership. Waiting is shown only
-  after native audio activity, and an eight-second startup watchdog cancels a
-  stalled start. Stop invalidates and cancels immediately from every active
-  state. Japanese and Korean app modes now configure installed `ja-JP` and
-  `ko-KR` recognizers per session; Japanese + Korean uses a logged, supported
-  single-language fallback because the current plugin exposes no native language
-  switching API. Lifecycle traces include UTC timestamps, state, session ID,
-  exact locale, platform status and Android error code where available.
-  VAD-driven stops, automatic restarts, retry backoff and recognition mode
-  switching remain frozen. Generated Android manifests include microphone,
-  internet, recognition-service and TTS-service declarations.
+- **Restored the FU2 Conversation Assist loop.** One Listen action keeps the
+  foreground conversation session active across isolated recognizer turns:
+  listen, finalize, generate relevant Standard / Humorous / Flirty responses,
+  optionally speak the primary response, wait for TTS audio ownership to end,
+  and automatically rearm listening. Each native turn retains an immutable
+  session ID and explicit starting, ready, speech, processing, TTS, resuming and
+  stopping ownership. Stop invalidates every pending callback or rearm. Japanese
+  and Korean app modes still configure installed `ja-JP` and `ko-KR`
+  recognizers per turn; Japanese + Korean retains the logged supported fallback.
+  Current language support, response libraries, context, UI and stored data are
+  unchanged. TTS continues to omit emoji from spoken text. Generated Android
+  manifests include microphone, internet, recognition-service and TTS-service
+  declarations.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or
   correcting a situation with one thumb. Hold the trigger and drag to select in
   one continuous gesture, or tap to pin the menu open and browse it. Eight root

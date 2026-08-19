@@ -60,6 +60,7 @@ class ConversationAssistController extends ChangeNotifier {
     this.languageDetector = const ConversationLanguageDetector(),
     this.logger = const ConversationSpeechLogger(),
     this.startupWatchdogDuration = const Duration(seconds: 8),
+    this.finalStatusWatchdogDuration = const Duration(milliseconds: 750),
     this.processingTimeoutDuration = const Duration(seconds: 12),
     this.ttsReadinessTimeout = const Duration(seconds: 5),
     this.ttsPlaybackTimeout = const Duration(seconds: 30),
@@ -76,6 +77,7 @@ class ConversationAssistController extends ChangeNotifier {
   final ConversationLanguageDetector languageDetector;
   final ConversationSpeechLogger logger;
   final Duration startupWatchdogDuration;
+  final Duration finalStatusWatchdogDuration;
   final Duration processingTimeoutDuration;
   final Duration ttsReadinessTimeout;
   final Duration ttsPlaybackTimeout;
@@ -126,6 +128,7 @@ class ConversationAssistController extends ChangeNotifier {
   int _sessionSequence = 0;
   int? _activeSessionId;
   Timer? _startupWatchdog;
+  Timer? _finalStatusWatchdog;
   Timer? _processingWatchdog;
   int? _processingWatchdogTurnId;
   Future<void>? _recognitionCleanup;
@@ -466,7 +469,7 @@ class ConversationAssistController extends ChangeNotifier {
     };
   }
 
-  /// Immediately invalidates and cancels the current manual Listen session.
+  /// Immediately invalidates and cancels the foreground Listen Mode session.
   Future<void> stop() async {
     final sessionId = _activeSessionId;
     if (!listenModeActive && sessionId == null) return;
@@ -488,6 +491,7 @@ class ConversationAssistController extends ChangeNotifier {
     _resumingFromTurnId = null;
     _resumeRequestedAt = null;
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     _clearProcessingWatchdog();
     _activeSessionId = null;
     _activeTurnId = ++_turnSequence;
@@ -553,6 +557,7 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> cancel() async {
     final sessionId = _activeSessionId;
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     _clearProcessingWatchdog();
     _listenModeEnabled = false;
     _cancelPendingRearm('cancel_requested');
@@ -626,6 +631,7 @@ class ConversationAssistController extends ChangeNotifier {
     _cancelPendingRearm('manual_transcript');
     if (pendingRearm != null) await pendingRearm;
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     if (sessionId != null) {
       _activeSessionId = null;
       await _recognition.cancel(sessionId: sessionId);
@@ -1221,6 +1227,7 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> _completeSpeechSession(int sessionId, String text) async {
     if (_activeSessionId != sessionId || _closed) return;
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     _activeSessionId = null;
     _nativeRecognitionStatus = 'TERMINAL';
     final turnId = _activeCaptureTurnId ?? ++_turnSequence;
@@ -1534,6 +1541,7 @@ class ConversationAssistController extends ChangeNotifier {
         'final_waiting_for_terminal_status',
       );
       _setPhase(ConversationAssistPhase.finalizing);
+      _armFinalStatusWatchdog(sessionId);
     }
   }
 
@@ -1633,6 +1641,7 @@ class ConversationAssistController extends ChangeNotifier {
     }
     if (status.startsWith('done') || status == 'notListening') {
       _startupWatchdog?.cancel();
+      _finalStatusWatchdog?.cancel();
       unawaited(_completeSpeechSession(sessionId, _transcript));
     }
   }
@@ -1647,6 +1656,7 @@ class ConversationAssistController extends ChangeNotifier {
     final wasEstablishedTurn =
         _speechState != ConversationSpeechState.starting;
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     _activeSessionId = null;
     _nativeRecognitionStatus = 'ERROR';
     final normalized = message.toLowerCase();
@@ -2338,6 +2348,67 @@ class ConversationAssistController extends ChangeNotifier {
     });
   }
 
+  /// A native final transcript normally arrives immediately before the
+  /// recognizer's terminal status. Some Android recognizers occasionally omit
+  /// that last status callback, which used to leave a visible transcript stuck
+  /// in FINALIZING forever. Give the provider time to finish naturally, then
+  /// ask it to release the microphone. Response generation still starts only
+  /// after the recognizer has relinquished audio ownership.
+  void _armFinalStatusWatchdog(int sessionId) {
+    _finalStatusWatchdog?.cancel();
+    _finalStatusWatchdog = Timer(finalStatusWatchdogDuration, () {
+      if (_closed ||
+          _activeSessionId != sessionId ||
+          _speechState != ConversationSpeechState.finalizing) {
+        return;
+      }
+      logger.event(
+        sessionId: sessionId,
+        state: 'FINALIZING',
+        event: 'terminal_status_watchdog_fired',
+      );
+      unawaited(_releaseFinalizedRecognitionSession(sessionId));
+    });
+  }
+
+  Future<void> _releaseFinalizedRecognitionSession(int sessionId) async {
+    try {
+      await _recognition
+          .stop(sessionId: sessionId)
+          .timeout(const Duration(seconds: 2));
+      // Platform stop futures may finish just before their status callback.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      if (_activeSessionId != sessionId || _closed) return;
+      logger.event(
+        sessionId: sessionId,
+        state: 'FINALIZING',
+        event: 'terminal_status_still_missing_after_stop',
+      );
+      await _recognition
+          .cancel(sessionId: sessionId)
+          .timeout(const Duration(seconds: 2));
+      if (_activeSessionId == sessionId && !_closed) {
+        await _completeSpeechSession(sessionId, _transcript);
+      }
+    } on Object catch (error) {
+      if (_activeSessionId != sessionId || _closed) return;
+      _errorMessage = '$error';
+      logger.event(
+        sessionId: sessionId,
+        state: 'ERROR',
+        event: 'finalized_session_release_failed',
+        details: <String, Object?>{'message': error},
+      );
+      _activeSessionId = null;
+      _recoverFromRecognitionError(
+        sessionId,
+        event: 'finalized_session_release_error',
+        phase: ConversationAssistPhase.error,
+        automaticallyRearm: false,
+      );
+    }
+  }
+
   Future<void> _cancelStalledSession(int sessionId) async {
     try {
       await _recognition.cancel(sessionId: sessionId);
@@ -2408,6 +2479,7 @@ class ConversationAssistController extends ChangeNotifier {
   @override
   void dispose() {
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     _processingWatchdog?.cancel();
     _speechController?.removeListener(_onSpeechStateChanged);
     _speechController?.setPlaybackGuard(null);
@@ -2420,6 +2492,7 @@ class ConversationAssistController extends ChangeNotifier {
     _closed = true;
     _cancelPendingRearm('controller_closed');
     _startupWatchdog?.cancel();
+    _finalStatusWatchdog?.cancel();
     _processingWatchdog?.cancel();
     _listenModeEnabled = false;
     _activeSessionId = null;

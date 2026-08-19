@@ -32,8 +32,10 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
     super.initState();
     _controller = ConversationAssistController(
       recognition: SpeechToTextRecognitionService(),
-      // Repair baseline: one user-triggered native recognition turn only.
-      automaticRearmEnabled: false,
+      // Preserve the proven FU2 conversation loop: one user action enables
+      // Listen Mode, while each completed native recognition turn is rearmed
+      // only after response generation and any primary TTS playback finish.
+      automaticRearmEnabled: true,
     )..addListener(_onControllerChanged);
   }
 
@@ -317,7 +319,7 @@ class _ListenPanel extends StatelessWidget {
     final partialTranscript = controller.partialTranscript;
     final finalTranscript = controller.finalTranscript;
     final diagnosticText = <String>[
-      'Mode: MANUAL_STT_REPAIR',
+      'Mode: CONTINUOUS_CONVERSATION',
       'MIC OWNER: ${controller.microphoneOwner}',
       'AUDIO INPUT ACTIVE: '
           '${controller.audioInputActive ? 'YES' : 'NO'}',

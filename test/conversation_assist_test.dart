@@ -577,6 +577,43 @@ void main() {
     expect(controller.speechState, ConversationSpeechState.idle);
   });
 
+  test(
+    'a final transcript triggers a response if terminal status is lost',
+    () async {
+      final recognition = FakeConversationRecognitionService();
+      final speechService = ControlledSpeechService();
+      final speech = SpeechController(speechService);
+      addTearDown(speech.dispose);
+      final controller = ConversationAssistController(
+        recognition: recognition,
+        finalStatusWatchdogDuration: const Duration(milliseconds: 5),
+        postTtsAudioReleaseDelay: Duration.zero,
+      );
+      addTearDown(controller.dispose);
+      final reply = OpenerLine(
+        id: 'missing-terminal-reply',
+        japaneseText: '今はいないですよ。🙂',
+        topics: const <String>{'relationship_status'},
+      );
+      await controller.start(
+        library: <OpenerLine>[reply],
+        preferences: const ConversationPreferences(),
+        speechController: speech,
+        autoSpeak: true,
+      );
+
+      recognition.resultWithoutTerminal('彼女いますか？', 0.9);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(recognition.stopCount, 1);
+      expect(controller.result, isNotNull);
+      expect(controller.result!.suggestions.first.line.id, reply.id);
+      expect(speechService.spoken, <String>['今はいないですよ。']);
+      expect(controller.listenModeActive, isTrue);
+      expect(recognition.startCount, 2);
+    },
+  );
+
   test('Listen button transition lock rejects duplicate Start and Stop',
       () async {
     final recognition = FakeConversationRecognitionService();
@@ -1708,6 +1745,15 @@ class FakeConversationRecognitionService
       confidence,
     );
     if (finalResult) callbacks!.onStatus(resolvedSessionId, 'done');
+  }
+
+  void resultWithoutTerminal(
+    String text,
+    double confidence, {
+    int? sessionId,
+  }) {
+    final resolvedSessionId = sessionId ?? currentSessionId!;
+    callbacks!.onResult(resolvedSessionId, text, true, confidence);
   }
 
   void status(String status, {int? sessionId}) =>
