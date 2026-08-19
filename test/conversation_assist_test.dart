@@ -8,6 +8,7 @@ import 'package:opencue/domain/models/opener_line.dart';
 import 'package:opencue/domain/speech/speech_controller.dart';
 import 'package:opencue/domain/speech/speech_service.dart';
 
+import '../lib/data/conversation/speech_to_text_recognition_service.dart';
 import '../lib/domain/conversation/conversation_assist_controller.dart';
 import '../lib/domain/conversation/conversation_intent_catalog.dart';
 import '../lib/domain/conversation/conversation_intent_matcher.dart';
@@ -521,6 +522,29 @@ void main() {
     expect(tracker.preRollDuration, const Duration(milliseconds: 300));
   });
 
+  test('VAD waiting state does not expire after thirty seconds of silence', () {
+    final tracker = VoiceActivityTracker();
+    final start = DateTime.utc(2026, 1, 1);
+    tracker.addLevel(1, start);
+
+    expect(
+      tracker.shouldStop(start.add(const Duration(seconds: 10))),
+      isFalse,
+    );
+    expect(
+      tracker.shouldStop(start.add(const Duration(seconds: 30))),
+      isFalse,
+    );
+    expect(tracker.heardSpeech, isFalse);
+  });
+
+  test('speech plugin timers cannot cycle a normal waiting session', () {
+    expect(
+      SpeechToTextRecognitionService.persistentWaitingWindow.inMinutes,
+      greaterThan(30),
+    );
+  });
+
   test('VAD ignores an isolated ambient spike', () {
     final tracker = VoiceActivityTracker(
       speechDebounce: const Duration(milliseconds: 120),
@@ -571,6 +595,54 @@ void main() {
     expect(controller.result, isNotNull);
     expect(recognition.startCount, 2);
     expect(controller.speechState, ConversationSpeechState.starting);
+  });
+
+  test('speech start locks the turn against recognizer restart', () async {
+    final recognition = FakeConversationRecognitionService();
+    final logs = <String>[];
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      logger: ConversationSpeechLogger(sink: logs.add),
+      voiceActivityTracker: VoiceActivityTracker(
+        silenceDuration: const Duration(seconds: 5),
+        minimumSpeechDuration: Duration.zero,
+        speechDebounce: Duration.zero,
+      ),
+    );
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'turn-lock-reply',
+      japaneseText: '今はいないですよ。',
+      topics: const <String>{'relationship_status'},
+    );
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.sound(0);
+    recognition.sound(10);
+
+    expect(controller.turnLocked, isTrue);
+    expect(controller.activeRecognitionSessionId, 1);
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+    );
+    expect(recognition.startCount, 1);
+
+    recognition.result('彼女いますか？', false, 0.8);
+    expect(controller.turnLocked, isTrue);
+    expect(recognition.startCount, 1);
+    expect(
+      logs.where((line) => line.contains('[VAD]') &&
+          line.contains('event=reset')),
+      hasLength(1),
+    );
+
+    recognition.result('彼女いますか？', true, 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(controller.turnLocked, isFalse);
+    expect(recognition.startCount, 2);
   });
 
   test('Listen button transition lock rejects duplicate Start and Stop',

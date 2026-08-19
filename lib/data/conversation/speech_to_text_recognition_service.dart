@@ -23,6 +23,11 @@ class SpeechToTextRecognitionService
   int? _activeSessionId;
   Future<bool>? _initializeFuture;
 
+  /// `speech_to_text` treats both listenFor and pauseFor as maximum timers.
+  /// Keep them well outside a normal conversation so OpenCue's RMS/VAD turn
+  /// detector, not a fixed plugin timer, decides when an utterance ends.
+  static const Duration persistentWaitingWindow = Duration(hours: 1);
+
   @override
   bool get isSupported => _available;
 
@@ -94,14 +99,17 @@ class SpeechToTextRecognitionService
               config.nativeLanguageDetectionSupported,
           'languageSwitchingSupported':
               config.nativeLanguageSwitchingSupported,
+          'pluginListenForMs': persistentWaitingWindow.inMilliseconds,
+          'pluginPauseForMs': persistentWaitingWindow.inMilliseconds,
+          'waitingMode': 'persistent_until_speech_or_stop',
         },
       );
       await _speech.listen(
         onResult: (result) => _onResult(sessionId, result),
         onSoundLevelChange: (level) => _onSoundLevel(sessionId, level),
         localeId: config.localeId,
-        listenFor: const Duration(seconds: 55),
-        pauseFor: const Duration(seconds: 3),
+        listenFor: persistentWaitingWindow,
+        pauseFor: persistentWaitingWindow,
         partialResults: true,
         cancelOnError: true,
         onDevice: false,
@@ -113,6 +121,9 @@ class SpeechToTextRecognitionService
         event: 'listen_call_returned',
         details: <String, Object?>{
           'speechIsListening': _speech.isListening,
+          'pluginListenForMs': persistentWaitingWindow.inMilliseconds,
+          'pluginPauseForMs': persistentWaitingWindow.inMilliseconds,
+          'normalEndOfSpeechOwner': 'opencue_vad',
         },
       );
       return config;
