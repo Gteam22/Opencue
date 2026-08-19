@@ -8,7 +8,6 @@ import 'package:opencue/domain/models/opener_line.dart';
 import 'package:opencue/domain/speech/speech_controller.dart';
 import 'package:opencue/domain/speech/speech_service.dart';
 
-import '../lib/data/conversation/speech_to_text_recognition_service.dart';
 import '../lib/domain/conversation/conversation_assist_controller.dart';
 import '../lib/domain/conversation/conversation_intent_catalog.dart';
 import '../lib/domain/conversation/conversation_intent_matcher.dart';
@@ -522,17 +521,6 @@ void main() {
     expect(tracker.preRollDuration, const Duration(milliseconds: 300));
   });
 
-  test('native pause timeout is long while waiting and short after speech', () {
-    expect(
-      SpeechToTextRecognitionService.waitingPause,
-      const Duration(seconds: 45),
-    );
-    expect(
-      SpeechToTextRecognitionService.capturingPause,
-      ConversationAssistController.nativeCapturePause,
-    );
-  });
-
   test('VAD ignores an isolated ambient spike', () {
     final tracker = VoiceActivityTracker(
       speechDebounce: const Duration(milliseconds: 120),
@@ -548,45 +536,45 @@ void main() {
     );
   });
 
-  test('controller VAD detects speech, ends on silence, and resumes',
+  test('native recognizer final result completes one manual turn without rearm',
       () async {
     final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService();
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
     final controller = ConversationAssistController(
       recognition: recognition,
-      voiceActivityTracker: VoiceActivityTracker(
-        silenceDuration: const Duration(milliseconds: 25),
-        minimumSpeechDuration: Duration.zero,
-        speechDebounce: Duration.zero,
-      ),
-      vadPollInterval: const Duration(milliseconds: 5),
+      automaticRearmEnabled: false,
     );
     addTearDown(controller.dispose);
     final reply = OpenerLine(
-      id: 'vad-reply',
+      id: 'manual-stt-repair-reply',
       japaneseText: '今はいないですよ。',
       topics: const <String>{'relationship_status'},
     );
     await controller.start(
       library: <OpenerLine>[reply],
       preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
     );
     recognition.sound(0);
     recognition.result('彼女いますか？', false, 0.8);
-    expect(
-      recognition.pauseChanges,
-      <Duration>[ConversationAssistController.nativeCapturePause],
-    );
     expect(
       controller.speechState,
       ConversationSpeechState.capturingUtterance,
     );
 
+    expect(recognition.stopCount, 0);
+    recognition.result('彼女いますか？', true, 0.9);
     await Future<void>.delayed(const Duration(milliseconds: 90));
 
-    expect(recognition.stopCount, 1);
+    expect(recognition.stopCount, 0);
     expect(controller.result, isNotNull);
-    expect(recognition.startCount, 2);
-    expect(controller.speechState, ConversationSpeechState.starting);
+    expect(speechService.spoken, <String>['今はいないですよ。']);
+    expect(recognition.startCount, 1);
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.speechState, ConversationSpeechState.idle);
   });
 
   test('Listen button transition lock rejects duplicate Start and Stop',
@@ -1662,7 +1650,6 @@ class FakeConversationRecognitionService
   final List<int> sessionIds = <int>[];
   final List<ConversationInputLanguage> languages =
       <ConversationInputLanguage>[];
-  final List<Duration> pauseChanges = <Duration>[];
 
   @override
   bool get isSupported => true;
@@ -1744,14 +1731,6 @@ class FakeConversationRecognitionService
     started = false;
     stopCount++;
     callbacks!.onStatus(sessionId, 'done');
-  }
-
-  @override
-  void changePauseFor({
-    required int sessionId,
-    required Duration pauseFor,
-  }) {
-    if (sessionId == currentSessionId) pauseChanges.add(pauseFor);
   }
 
   @override

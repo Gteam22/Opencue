@@ -54,13 +54,6 @@ abstract interface class ConversationRecognitionService {
 
   Future<void> stop({required int sessionId});
 
-  /// Changes the platform recognizer's silence timeout after speech begins.
-  /// Implementations that cannot change it may safely ignore this request.
-  void changePauseFor({
-    required int sessionId,
-    required Duration pauseFor,
-  });
-
   Future<void> cancel({required int sessionId});
 
   /// Ensures the recognizer releases its microphone/audio-session resources.
@@ -91,12 +84,6 @@ class NullConversationRecognitionService
 
   @override
   Future<void> stop({required int sessionId}) async {}
-
-  @override
-  void changePauseFor({
-    required int sessionId,
-    required Duration pauseFor,
-  }) {}
 
   @override
   Future<void> cancel({required int sessionId}) async {}

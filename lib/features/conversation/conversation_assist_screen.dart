@@ -32,6 +32,8 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
     super.initState();
     _controller = ConversationAssistController(
       recognition: SpeechToTextRecognitionService(),
+      // Repair baseline: one user-triggered native recognition turn only.
+      automaticRearmEnabled: false,
     )..addListener(_onControllerChanged);
   }
 
@@ -312,6 +314,24 @@ class _ListenPanel extends StatelessWidget {
       ConversationAssistPhase.error =>
         controller.errorMessage ?? strings.t('assist.error'),
     };
+    final partialTranscript = controller.partialTranscript;
+    final finalTranscript = controller.finalTranscript;
+    final diagnosticText = <String>[
+      'Mode: MANUAL_STT_REPAIR',
+      'MIC OWNER: ${controller.microphoneOwner}',
+      'AUDIO INPUT ACTIVE: '
+          '${controller.audioInputActive ? 'YES' : 'NO'}',
+      'RECOGNIZER STATE: ${controller.nativeRecognitionStatus}',
+      'LANGUAGE: ${controller.recognitionLocale ?? '-'}',
+      'SESSION ID: ${controller.activeRecognitionSessionId ?? '-'}',
+      'AUDIO LEVEL: ${controller.soundLevel.toStringAsFixed(1)}',
+      'VOICE DETECTED: ${controller.voiceDetected ? 'YES' : 'NO'}',
+      'PARTIAL TRANSCRIPT: '
+          '${partialTranscript.isEmpty ? '-' : partialTranscript}',
+      'FINAL TRANSCRIPT: '
+          '${finalTranscript.isEmpty ? '-' : finalTranscript}',
+      'LAST ERROR: ${controller.errorMessage ?? 'none'}',
+    ].join('\n');
     return Card(
       color: listening ? theme.colorScheme.primaryContainer : null,
       child: Padding(
@@ -353,10 +373,7 @@ class _ListenPanel extends StatelessWidget {
                   if (showDiagnostics) ...<Widget>[
                     const SizedBox(height: 4),
                     Text(
-                      'Recognizer: ${controller.nativeRecognitionStatus}  '
-                      'Language: ${controller.recognitionLocale ?? '-'}  '
-                      'Session: '
-                      '${controller.activeRecognitionSessionId ?? '-'}',
+                      diagnosticText,
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),

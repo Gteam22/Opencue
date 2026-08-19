@@ -13,7 +13,6 @@ import 'conversation_speech_log.dart';
 import 'language_detector.dart';
 import 'semantic_intent_classifier.dart';
 import 'transcript_normalizer.dart';
-import 'voice_activity_tracker.dart';
 
 enum ConversationAssistPhase {
   idle,
@@ -64,13 +63,11 @@ class ConversationAssistController extends ChangeNotifier {
     this.processingTimeoutDuration = const Duration(seconds: 12),
     this.ttsReadinessTimeout = const Duration(seconds: 5),
     this.ttsPlaybackTimeout = const Duration(seconds: 30),
-    VoiceActivityTracker? voiceActivityTracker,
-    this.vadPollInterval = const Duration(milliseconds: 100),
+    this.automaticRearmEnabled = true,
     this.listenButtonDebounce = const Duration(milliseconds: 350),
     this.postTtsAudioReleaseDelay = const Duration(milliseconds: 200),
     this.rearmRetryDelay = const Duration(milliseconds: 250),
-  })  : _recognition = recognition,
-        _voiceActivity = voiceActivityTracker ?? VoiceActivityTracker();
+  }) : _recognition = recognition;
 
   final ConversationRecognitionService _recognition;
   final ConversationSuggestionProvider responseEngine;
@@ -82,11 +79,10 @@ class ConversationAssistController extends ChangeNotifier {
   final Duration processingTimeoutDuration;
   final Duration ttsReadinessTimeout;
   final Duration ttsPlaybackTimeout;
-  final Duration vadPollInterval;
+  final bool automaticRearmEnabled;
   final Duration listenButtonDebounce;
   final Duration postTtsAudioReleaseDelay;
   final Duration rearmRetryDelay;
-  final VoiceActivityTracker _voiceActivity;
 
   ConversationAssistPhase _phase = ConversationAssistPhase.idle;
   String _transcript = '';
@@ -141,10 +137,8 @@ class ConversationAssistController extends ChangeNotifier {
   int? _autoTtsTurnId;
   int? _resumingFromTurnId;
   DateTime? _resumeRequestedAt;
-  Timer? _vadTimer;
-  Timer? _vadFinalizationWatchdog;
-  bool _vadStopRequested = false;
   int? _activeCaptureTurnId;
+  bool _lastResultWasFinal = false;
   bool _listenButtonTransitionLocked = false;
   DateTime? _lastListenButtonEventAt;
   int _listenButtonTransitionSequence = 0;
@@ -156,7 +150,6 @@ class ConversationAssistController extends ChangeNotifier {
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
-  static const Duration nativeCapturePause = Duration(seconds: 3);
 
   ConversationAssistPhase get phase => _phase;
   String get transcript => _transcript;
@@ -183,6 +176,14 @@ class ConversationAssistController extends ChangeNotifier {
   bool get listenButtonTransitionLocked => _listenButtonTransitionLocked;
   bool get recognitionSuppressed => _suppressRecognition;
   bool get autoSpeak => _autoSpeak;
+  String get microphoneOwner =>
+      _activeSessionId == null ? 'none' : 'SpeechRecognizer';
+  bool get audioInputActive =>
+      _activeSessionId != null &&
+      _speechState != ConversationSpeechState.starting;
+  bool get voiceDetected => _activeCaptureTurnId != null;
+  String get partialTranscript => _lastResultWasFinal ? '' : _transcript;
+  String get finalTranscript => _lastResultWasFinal ? _transcript : '';
   int get activeTurnId => _activeTurnId;
   int? get activeRecognitionSessionId => _activeSessionId;
   ConversationSpeechState get speechState => _speechState;
@@ -356,11 +357,9 @@ class ConversationAssistController extends ChangeNotifier {
       return false;
     }
     _transcript = '';
+    _lastResultWasFinal = false;
     _confidence = 0;
     _errorMessage = null;
-    _stopVadMonitoring();
-    _voiceActivity.reset();
-    _vadStopRequested = false;
     _activeCaptureTurnId = null;
     final sessionId = ++_sessionSequence;
     _activeSessionId = sessionId;
@@ -489,7 +488,6 @@ class ConversationAssistController extends ChangeNotifier {
     _resumingFromTurnId = null;
     _resumeRequestedAt = null;
     _startupWatchdog?.cancel();
-    _stopVadMonitoring();
     _clearProcessingWatchdog();
     _activeSessionId = null;
     _activeTurnId = ++_turnSequence;
@@ -555,7 +553,6 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> cancel() async {
     final sessionId = _activeSessionId;
     _startupWatchdog?.cancel();
-    _stopVadMonitoring();
     _clearProcessingWatchdog();
     _listenModeEnabled = false;
     _cancelPendingRearm('cancel_requested');
@@ -1224,7 +1221,6 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> _completeSpeechSession(int sessionId, String text) async {
     if (_activeSessionId != sessionId || _closed) return;
     _startupWatchdog?.cancel();
-    _stopVadMonitoring();
     _activeSessionId = null;
     _nativeRecognitionStatus = 'TERMINAL';
     final turnId = _activeCaptureTurnId ?? ++_turnSequence;
@@ -1487,13 +1483,12 @@ class ConversationAssistController extends ChangeNotifier {
     if (_activeSessionId != sessionId || _suppressRecognition) return;
     _startupWatchdog?.cancel();
     if (text.trim().isNotEmpty) _transcript = text.trim();
+    _lastResultWasFinal = isFinal;
     _confidence = confidence;
     _nativeRecognitionStatus = isFinal ? 'FINAL_RESULT' : 'PARTIAL_RESULT';
     if (_transcript.isNotEmpty && !isFinal) {
-      _voiceActivity.confirmSpeech(DateTime.now());
-      if (_vadTimer == null) _startVadMonitoring(sessionId);
       if (_activeCaptureTurnId == null) {
-        _markVadSpeechDetected(
+        _ensureCaptureTurn(
           sessionId,
           source: 'native_partial_result',
         );
@@ -1515,7 +1510,6 @@ class ConversationAssistController extends ChangeNotifier {
     );
     if (isFinal) {
       if (_transcript.isNotEmpty) {
-        _voiceActivity.confirmSpeech(DateTime.now());
         if (_activeCaptureTurnId == null) {
           final turnId = _ensureCaptureTurn(
             sessionId,
@@ -1546,8 +1540,6 @@ class ConversationAssistController extends ChangeNotifier {
   void _onSoundLevel(int sessionId, double level) {
     if (_activeSessionId != sessionId) return;
     _soundLevel = level;
-    final heardBefore = _voiceActivity.heardSpeech;
-    _voiceActivity.addLevel(level, DateTime.now());
     if (_speechState == ConversationSpeechState.starting) {
       // speech_to_text exposes Android onRmsChanged as sound-level callbacks.
       // This is the first public event proving that the native recognizer has
@@ -1561,14 +1553,14 @@ class ConversationAssistController extends ChangeNotifier {
         'native_audio_callback_ready',
       );
       _setPhase(ConversationAssistPhase.waitingForSpeech);
-      _startVadMonitoring(sessionId);
       _consecutiveRecognitionRecoveries = 0;
       logger.turn(
         turnId: _resumingFromTurnId ?? _activeTurnId,
         state: 'READY_FOR_SPEECH',
         event: 'rearm_audio_verified',
         details: <String, Object?>{
-          'vadArmed': _vadTimer != null,
+          'vadArmed': false,
+          'nativeRecognizerOwnsTurnEnd': true,
           'microphoneActive': true,
           'recognizerReady': true,
           'locale': _recognitionLocale,
@@ -1599,88 +1591,9 @@ class ConversationAssistController extends ChangeNotifier {
         _resumingFromTurnId = null;
         _resumeRequestedAt = null;
       }
-      if (!heardBefore && _voiceActivity.heardSpeech) {
-        _markVadSpeechDetected(sessionId);
-      }
-      return;
-    }
-    if (!heardBefore && _voiceActivity.heardSpeech) {
-      _markVadSpeechDetected(sessionId);
-    } else if (_voiceActivity.heardSpeech &&
-        _speechState == ConversationSpeechState.speechDetected) {
-      _setSpeechState(
-        ConversationSpeechState.capturingUtterance,
-        sessionId,
-        'vad_capturing_utterance',
-      );
-      _setPhase(ConversationAssistPhase.capturingUtterance);
-    }
-    if (_voiceActivity.shouldStop(DateTime.now())) {
-      unawaited(_finalizeVadUtterance(sessionId));
       return;
     }
     notifyListeners();
-  }
-
-  void _startVadMonitoring(int sessionId) {
-    _vadTimer?.cancel();
-    _vadTimer = Timer.periodic(vadPollInterval, (_) {
-      if (_closed ||
-          !_listenModeEnabled ||
-          _activeSessionId != sessionId ||
-          _vadStopRequested) {
-        return;
-      }
-      if (_voiceActivity.shouldStop(DateTime.now())) {
-        unawaited(_finalizeVadUtterance(sessionId));
-      }
-    });
-    logger.event(
-      sessionId: sessionId,
-      state: 'WAITING_FOR_SPEECH',
-      event: 'vad_monitoring_started',
-      details: <String, Object?>{
-        'silenceMs': _voiceActivity.silenceDuration.inMilliseconds,
-        'minimumSpeechMs':
-            _voiceActivity.minimumSpeechDuration.inMilliseconds,
-        'speechDebounceMs': _voiceActivity.speechDebounce.inMilliseconds,
-        'preRollMs': _voiceActivity.preRollDuration.inMilliseconds,
-        'audioOwner': 'speech_to_text_only',
-      },
-    );
-  }
-
-  void _markVadSpeechDetected(
-    int sessionId, {
-    String source = 'adaptive_rms_vad',
-  }) {
-    final turnId = _ensureCaptureTurn(sessionId, source: source);
-    _setSpeechState(
-      ConversationSpeechState.speechDetected,
-      sessionId,
-      'vad_speech_detected',
-    );
-    _setPhase(ConversationAssistPhase.hearingSpeech);
-    logger.turn(
-      turnId: turnId,
-      state: 'SPEECH_DETECTED',
-      event: '${source}_speech_confirmed',
-      details: <String, Object?>{
-        'noiseFloor': _voiceActivity.noiseFloor,
-        'preRollMs': _voiceActivity.preRollDuration.inMilliseconds,
-      },
-    );
-    if (_isKoreanRecognition) {
-      logger.korean(
-        turnId: turnId,
-        sessionId: sessionId,
-        event: 'speech_detected',
-        details: <String, Object?>{
-          'language': _recognitionLocale,
-          'speechDetected': true,
-        },
-      );
-    }
   }
 
   int _ensureCaptureTurn(int sessionId, {required String source}) {
@@ -1689,10 +1602,6 @@ class ConversationAssistController extends ChangeNotifier {
     final turnId = ++_turnSequence;
     _activeTurnId = turnId;
     _activeCaptureTurnId = turnId;
-    _recognition.changePauseFor(
-      sessionId: sessionId,
-      pauseFor: nativeCapturePause,
-    );
     logger.turn(
       turnId: turnId,
       state: 'SPEECH_DETECTED',
@@ -1700,89 +1609,9 @@ class ConversationAssistController extends ChangeNotifier {
       details: <String, Object?>{
         'sessionId': sessionId,
         'source': source,
-        'nativePauseForMs': nativeCapturePause.inMilliseconds,
       },
     );
     return turnId;
-  }
-
-  Future<void> _finalizeVadUtterance(int sessionId) async {
-    if (_vadStopRequested ||
-        !_listenModeEnabled ||
-        _activeSessionId != sessionId ||
-        !_voiceActivity.heardSpeech) {
-      return;
-    }
-    _vadStopRequested = true;
-    _vadTimer?.cancel();
-    _vadTimer = null;
-    _setSpeechState(
-      ConversationSpeechState.finalizing,
-      sessionId,
-      'vad_sustained_silence',
-    );
-    _setPhase(ConversationAssistPhase.finalizing);
-    final turnId = _activeCaptureTurnId;
-    if (turnId != null) {
-      logger.turn(
-        turnId: turnId,
-        state: 'FINALIZING',
-        event: 'speech_end_detected',
-        details: <String, Object?>{
-          'silenceMs': _voiceActivity.silenceDuration.inMilliseconds,
-        },
-      );
-    }
-    _vadFinalizationWatchdog?.cancel();
-    _vadFinalizationWatchdog = Timer(const Duration(seconds: 4), () {
-      if (_activeSessionId == sessionId &&
-          _speechState == ConversationSpeechState.finalizing) {
-        logger.event(
-          sessionId: sessionId,
-          state: 'FINALIZING',
-          event: 'vad_finalization_stalled',
-        );
-        unawaited(_recoverFromVadFinalizationStall(sessionId));
-      }
-    });
-    try {
-      await _recognition.stop(sessionId: sessionId);
-    } on Object catch (error) {
-      logger.event(
-        sessionId: sessionId,
-        state: 'FINALIZING',
-        event: 'vad_stop_error',
-        details: <String, Object?>{'message': error},
-      );
-      await _recoverFromVadFinalizationStall(sessionId);
-    }
-  }
-
-  Future<void> _recoverFromVadFinalizationStall(int sessionId) async {
-    if (_activeSessionId != sessionId) return;
-    _vadFinalizationWatchdog?.cancel();
-    _activeSessionId = null;
-    try {
-      await _recognition
-          .cancel(sessionId: sessionId)
-          .timeout(const Duration(seconds: 2));
-    } on Object {
-      // Stale-session protection below is still authoritative.
-    }
-    final turnId = _activeCaptureTurnId ?? ++_turnSequence;
-    _activeCaptureTurnId = null;
-    _activeTurnId = turnId;
-    if (_listenModeEnabled) {
-      await _resumeListening(turnId, reason: 'vad_finalization_recovery');
-    }
-  }
-
-  void _stopVadMonitoring() {
-    _vadTimer?.cancel();
-    _vadTimer = null;
-    _vadFinalizationWatchdog?.cancel();
-    _vadFinalizationWatchdog = null;
-    _vadStopRequested = false;
   }
 
   void _onStatus(int sessionId, String status) {
@@ -1818,7 +1647,6 @@ class ConversationAssistController extends ChangeNotifier {
     final wasEstablishedTurn =
         _speechState != ConversationSpeechState.starting;
     _startupWatchdog?.cancel();
-    _stopVadMonitoring();
     _activeSessionId = null;
     _nativeRecognitionStatus = 'ERROR';
     final normalized = message.toLowerCase();
@@ -2039,11 +1867,49 @@ class ConversationAssistController extends ChangeNotifier {
     required String reason,
     Duration audioReleaseDelay = Duration.zero,
   }) {
+    if (!automaticRearmEnabled) {
+      _finishManualRecognitionTurn(turnId, reason: reason);
+      return Future<void>.value();
+    }
     return _armNextConversationTurn(
       turnId,
       reason: reason,
       audioReleaseDelay: audioReleaseDelay,
     );
+  }
+
+  void _finishManualRecognitionTurn(
+    int turnId, {
+    required String reason,
+  }) {
+    if (_closed || !_isCurrentTurn(turnId)) return;
+    _listenModeEnabled = false;
+    _resumingFromTurnId = null;
+    _resumeRequestedAt = null;
+    _cancelPendingRearm('manual_stt_repair_complete');
+    logger.turn(
+      turnId: turnId,
+      state: _speechState.name.toUpperCase(),
+      event: 'manual_STT_turn_complete_no_rearm',
+      details: <String, Object?>{'reason': reason},
+    );
+    _setSpeechState(
+      ConversationSpeechState.idle,
+      _activeSessionId ?? 0,
+      'manual_turn_returned_to_idle',
+      notify: false,
+    );
+    if (_phase != ConversationAssistPhase.error &&
+        _phase != ConversationAssistPhase.permissionDenied &&
+        _phase != ConversationAssistPhase.unavailable) {
+      _setPhase(_result == null
+          ? (_transcript.trim().isEmpty
+              ? ConversationAssistPhase.noSpeech
+              : ConversationAssistPhase.idle)
+          : ConversationAssistPhase.suggestions);
+    } else {
+      notifyListeners();
+    }
   }
 
   /// Rearms one native recognizer session inside the still-enabled Listen Mode
@@ -2388,6 +2254,11 @@ class ConversationAssistController extends ChangeNotifier {
       'error_recovered_to_idle',
       notify: false,
     );
+    if (!automaticRearmEnabled) {
+      _listenModeEnabled = false;
+      notifyListeners();
+      return;
+    }
     if (!_listenModeEnabled || !automaticallyRearm) return;
     if (_consecutiveRecognitionRecoveries >= 1) {
       logger.turn(
@@ -2428,7 +2299,6 @@ class ConversationAssistController extends ChangeNotifier {
       );
       final recoveryTurnId = _resumingFromTurnId ?? _activeTurnId;
       _activeSessionId = null;
-      _stopVadMonitoring();
       _nativeRecognitionStatus = 'STARTUP_STALLED';
       _errorMessage = 'Speech recognizer did not activate. Please try again.';
       _setSpeechState(
@@ -2437,6 +2307,10 @@ class ConversationAssistController extends ChangeNotifier {
         'startup_watchdog_failed',
       );
       _setPhase(ConversationAssistPhase.error);
+      if (!automaticRearmEnabled) {
+        _listenModeEnabled = false;
+        notifyListeners();
+      }
       unawaited(_cancelStalledSession(sessionId).then((_) async {
         if (!_listenModeEnabled || _closed) return;
         if (_consecutiveRecognitionRecoveries >= 1) {
@@ -2535,7 +2409,6 @@ class ConversationAssistController extends ChangeNotifier {
   void dispose() {
     _startupWatchdog?.cancel();
     _processingWatchdog?.cancel();
-    _stopVadMonitoring();
     _speechController?.removeListener(_onSpeechStateChanged);
     _speechController?.setPlaybackGuard(null);
     unawaited(close());
@@ -2548,7 +2421,6 @@ class ConversationAssistController extends ChangeNotifier {
     _cancelPendingRearm('controller_closed');
     _startupWatchdog?.cancel();
     _processingWatchdog?.cancel();
-    _stopVadMonitoring();
     _listenModeEnabled = false;
     _activeSessionId = null;
     _speechController?.removeListener(_onSpeechStateChanged);

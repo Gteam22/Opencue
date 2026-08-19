@@ -14,17 +14,25 @@ class SpeechToTextRecognitionService
     SpeechToText? speech,
     ConversationSpeechLogger logger = const ConversationSpeechLogger(),
   })  : _speech = speech ?? SpeechToText(),
-        _logger = logger;
+        _logger = logger {
+    _logger.event(
+      sessionId: 0,
+      state: 'IDLE',
+      event: 'recognizer_adapter_created',
+      details: <String, Object?>{
+        'recognizerInstance': identityHashCode(_speech),
+        'language': '-',
+      },
+    );
+  }
 
   final SpeechToText _speech;
   final ConversationSpeechLogger _logger;
   ConversationRecognitionCallbacks? _callbacks;
   bool _available = false;
   int? _activeSessionId;
+  String? _activeLocale;
   Future<bool>? _initializeFuture;
-
-  static const Duration waitingPause = Duration(seconds: 45);
-  static const Duration capturingPause = Duration(seconds: 3);
 
   @override
   bool get isSupported => _available;
@@ -32,6 +40,12 @@ class SpeechToTextRecognitionService
   @override
   Future<bool> initialize(ConversationRecognitionCallbacks callbacks) {
     _callbacks = callbacks;
+    _logger.event(
+      sessionId: 0,
+      state: 'INITIALIZING',
+      event: 'callbacks_registered',
+      details: const <String, Object?>{'language': '-'},
+    );
     return _initializeFuture ??= _initializeOnce();
   }
 
@@ -43,6 +57,7 @@ class SpeechToTextRecognitionService
       details: const <String, Object?>{
         'androidNoBluetooth': true,
         'audioOwner': 'speech_to_text_only',
+        'language': '-',
       },
     );
     _available = await _speech.initialize(
@@ -56,7 +71,10 @@ class SpeechToTextRecognitionService
       sessionId: 0,
       state: _available ? 'IDLE' : 'ERROR',
       event: 'initialize_complete',
-      details: <String, Object?>{'available': _available},
+      details: <String, Object?>{
+        'available': _available,
+        'language': '-',
+      },
     );
     return _available;
   }
@@ -74,7 +92,10 @@ class SpeechToTextRecognitionService
         sessionId: sessionId,
         state: 'ERROR',
         event: 'start_rejected_busy',
-        details: <String, Object?>{'activeSession': _activeSessionId},
+        details: <String, Object?>{
+          'activeSession': _activeSessionId,
+          'language': _activeLocale ?? '-',
+        },
       );
       throw StateError('Speech recognizer is already active.');
     }
@@ -84,6 +105,7 @@ class SpeechToTextRecognitionService
       if (_activeSessionId != sessionId) {
         throw StateError('Speech recognition start was cancelled.');
       }
+      _activeLocale = config.localeId;
       _logger.event(
         sessionId: sessionId,
         state: 'STARTING',
@@ -97,8 +119,7 @@ class SpeechToTextRecognitionService
               config.nativeLanguageDetectionSupported,
           'languageSwitchingSupported':
               config.nativeLanguageSwitchingSupported,
-          'waitingPauseForMs': waitingPause.inMilliseconds,
-          'capturePauseForMs': capturingPause.inMilliseconds,
+          'nativeCall': 'startListening',
         },
       );
       await _speech.listen(
@@ -106,7 +127,7 @@ class SpeechToTextRecognitionService
         onSoundLevelChange: (level) => _onSoundLevel(sessionId, level),
         localeId: config.localeId,
         listenFor: const Duration(seconds: 55),
-        pauseFor: waitingPause,
+        pauseFor: const Duration(seconds: 3),
         partialResults: true,
         cancelOnError: true,
         onDevice: false,
@@ -118,6 +139,8 @@ class SpeechToTextRecognitionService
         event: 'listen_call_returned',
         details: <String, Object?>{
           'speechIsListening': _speech.isListening,
+          'language': _activeLocale,
+          'nativeCall': 'startListening_executed',
         },
       );
       return config;
@@ -127,8 +150,12 @@ class SpeechToTextRecognitionService
         sessionId: sessionId,
         state: 'ERROR',
         event: 'listen_failed',
-        details: <String, Object?>{'message': error},
+        details: <String, Object?>{
+          'message': error,
+          'language': _activeLocale,
+        },
       );
+      _activeLocale = null;
       rethrow;
     }
   }
@@ -234,6 +261,10 @@ class SpeechToTextRecognitionService
       details: <String, Object?>{
         'confidence': result.confidence,
         'characters': result.recognizedWords.length,
+        'language': _activeLocale,
+        'nativeCallback': result.finalResult
+            ? 'onResults'
+            : 'onPartialResults',
       },
     );
     _callbacks?.onResult(
@@ -250,7 +281,11 @@ class SpeechToTextRecognitionService
       sessionId: sessionId,
       state: 'LISTENING',
       event: 'sound_level',
-      details: <String, Object?>{'level': level},
+      details: <String, Object?>{
+        'level': level,
+        'language': _activeLocale,
+        'nativeCallback': 'onRmsChanged',
+      },
     );
     _callbacks?.onSoundLevel(sessionId, level);
   }
@@ -258,12 +293,17 @@ class SpeechToTextRecognitionService
   void _onStatus(String status) {
     final sessionId = _activeSessionId;
     if (sessionId == null) return;
+    final locale = _activeLocale;
     final terminal = status == 'done' || status == 'notListening';
     _logger.event(
       sessionId: sessionId,
       state: terminal ? 'PROCESSING' : 'STARTING',
       event: 'plugin_status',
-      details: <String, Object?>{'value': status},
+      details: <String, Object?>{
+        'value': status,
+        'language': locale,
+        'nativeCallback': 'onStatus',
+      },
     );
     // Release adapter ownership before notifying the controller. A terminal
     // callback may synchronously schedule the next persistent Listen session;
@@ -271,6 +311,7 @@ class SpeechToTextRecognitionService
     // recognizer-busy rejection.
     if (terminal && _activeSessionId == sessionId) {
       _activeSessionId = null;
+      _activeLocale = null;
     }
     _callbacks?.onStatus(sessionId, status);
   }
@@ -278,6 +319,7 @@ class SpeechToTextRecognitionService
   void _onError(SpeechRecognitionError error) {
     final sessionId = _activeSessionId;
     if (sessionId == null) return;
+    final locale = _activeLocale;
     final platformCode = _androidErrorCode(error.errorMsg);
     _logger.event(
       sessionId: sessionId,
@@ -287,15 +329,20 @@ class SpeechToTextRecognitionService
         'message': error.errorMsg,
         'platformCode': platformCode,
         'permanent': error.permanent,
+        'language': locale,
+        'nativeCallback': 'onError',
       },
     );
+    if (_activeSessionId == sessionId) {
+      _activeSessionId = null;
+      _activeLocale = null;
+    }
     _callbacks?.onError(
       sessionId,
       error.errorMsg,
       permanent: error.permanent,
       platformCode: platformCode,
     );
-    if (_activeSessionId == sessionId) _activeSessionId = null;
   }
 
   int? _androidErrorCode(String message) {
@@ -330,43 +377,12 @@ class SpeechToTextRecognitionService
       sessionId: sessionId,
       state: 'LISTENING',
       event: 'stop_requested',
+      details: <String, Object?>{
+        'language': _activeLocale,
+        'nativeCall': 'stopListening',
+      },
     );
     await _speech.stop();
-  }
-
-  @override
-  void changePauseFor({
-    required int sessionId,
-    required Duration pauseFor,
-  }) {
-    if (_activeSessionId != sessionId || !_speech.isListening) {
-      _logger.event(
-        sessionId: sessionId,
-        state: 'LISTENING',
-        event: 'pause_change_ignored_inactive_session',
-      );
-      return;
-    }
-    try {
-      _speech.changePauseFor(pauseFor);
-      _logger.event(
-        sessionId: sessionId,
-        state: 'LISTENING',
-        event: 'pause_timeout_changed_after_speech_start',
-        details: <String, Object?>{
-          'pauseForMs': pauseFor.inMilliseconds,
-        },
-      );
-    } on Object catch (error) {
-      // OpenCue's own VAD still calls stop() after sustained silence, so an
-      // unsupported late pause change must not fail the active utterance.
-      _logger.event(
-        sessionId: sessionId,
-        state: 'LISTENING',
-        event: 'pause_timeout_change_failed_ignored',
-        details: <String, Object?>{'message': error},
-      );
-    }
   }
 
   @override
@@ -376,15 +392,31 @@ class SpeechToTextRecognitionService
       sessionId: sessionId,
       state: 'LISTENING',
       event: 'cancel_requested',
+      details: <String, Object?>{
+        'language': _activeLocale,
+        'nativeCall': 'cancel',
+      },
     );
     await _speech.cancel();
     if (_activeSessionId == sessionId) _activeSessionId = null;
+    _activeLocale = null;
   }
 
   @override
   Future<void> dispose() async {
     final sessionId = _activeSessionId;
+    final locale = _activeLocale;
     if (sessionId != null) await cancel(sessionId: sessionId);
+    _logger.event(
+      sessionId: sessionId ?? 0,
+      state: 'IDLE',
+      event: 'recognizer_adapter_disposed',
+      details: <String, Object?>{
+        'recognizerInstance': identityHashCode(_speech),
+        'language': locale ?? '-',
+        'nativeDestroyExposed': false,
+      },
+    );
     _callbacks = null;
   }
 }
