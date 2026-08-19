@@ -156,6 +156,7 @@ class ConversationAssistController extends ChangeNotifier {
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
+  static const Duration nativeCapturePause = Duration(seconds: 3);
 
   ConversationAssistPhase get phase => _phase;
   String get transcript => _transcript;
@@ -1688,6 +1689,10 @@ class ConversationAssistController extends ChangeNotifier {
     final turnId = ++_turnSequence;
     _activeTurnId = turnId;
     _activeCaptureTurnId = turnId;
+    _recognition.changePauseFor(
+      sessionId: sessionId,
+      pauseFor: nativeCapturePause,
+    );
     logger.turn(
       turnId: turnId,
       state: 'SPEECH_DETECTED',
@@ -1695,6 +1700,7 @@ class ConversationAssistController extends ChangeNotifier {
       details: <String, Object?>{
         'sessionId': sessionId,
         'source': source,
+        'nativePauseForMs': nativeCapturePause.inMilliseconds,
       },
     );
     return turnId;

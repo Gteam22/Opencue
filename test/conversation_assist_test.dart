@@ -8,6 +8,7 @@ import 'package:opencue/domain/models/opener_line.dart';
 import 'package:opencue/domain/speech/speech_controller.dart';
 import 'package:opencue/domain/speech/speech_service.dart';
 
+import '../lib/data/conversation/speech_to_text_recognition_service.dart';
 import '../lib/domain/conversation/conversation_assist_controller.dart';
 import '../lib/domain/conversation/conversation_intent_catalog.dart';
 import '../lib/domain/conversation/conversation_intent_matcher.dart';
@@ -521,6 +522,17 @@ void main() {
     expect(tracker.preRollDuration, const Duration(milliseconds: 300));
   });
 
+  test('native pause timeout is long while waiting and short after speech', () {
+    expect(
+      SpeechToTextRecognitionService.waitingPause,
+      const Duration(seconds: 45),
+    );
+    expect(
+      SpeechToTextRecognitionService.capturingPause,
+      ConversationAssistController.nativeCapturePause,
+    );
+  });
+
   test('VAD ignores an isolated ambient spike', () {
     final tracker = VoiceActivityTracker(
       speechDebounce: const Duration(milliseconds: 120),
@@ -560,6 +572,10 @@ void main() {
     );
     recognition.sound(0);
     recognition.result('彼女いますか？', false, 0.8);
+    expect(
+      recognition.pauseChanges,
+      <Duration>[ConversationAssistController.nativeCapturePause],
+    );
     expect(
       controller.speechState,
       ConversationSpeechState.capturingUtterance,
@@ -1646,6 +1662,7 @@ class FakeConversationRecognitionService
   final List<int> sessionIds = <int>[];
   final List<ConversationInputLanguage> languages =
       <ConversationInputLanguage>[];
+  final List<Duration> pauseChanges = <Duration>[];
 
   @override
   bool get isSupported => true;
@@ -1727,6 +1744,14 @@ class FakeConversationRecognitionService
     started = false;
     stopCount++;
     callbacks!.onStatus(sessionId, 'done');
+  }
+
+  @override
+  void changePauseFor({
+    required int sessionId,
+    required Duration pauseFor,
+  }) {
+    if (sessionId == currentSessionId) pauseChanges.add(pauseFor);
   }
 
   @override

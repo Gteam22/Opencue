@@ -23,6 +23,9 @@ class SpeechToTextRecognitionService
   int? _activeSessionId;
   Future<bool>? _initializeFuture;
 
+  static const Duration waitingPause = Duration(seconds: 45);
+  static const Duration capturingPause = Duration(seconds: 3);
+
   @override
   bool get isSupported => _available;
 
@@ -94,6 +97,8 @@ class SpeechToTextRecognitionService
               config.nativeLanguageDetectionSupported,
           'languageSwitchingSupported':
               config.nativeLanguageSwitchingSupported,
+          'waitingPauseForMs': waitingPause.inMilliseconds,
+          'capturePauseForMs': capturingPause.inMilliseconds,
         },
       );
       await _speech.listen(
@@ -101,7 +106,7 @@ class SpeechToTextRecognitionService
         onSoundLevelChange: (level) => _onSoundLevel(sessionId, level),
         localeId: config.localeId,
         listenFor: const Duration(seconds: 55),
-        pauseFor: const Duration(seconds: 3),
+        pauseFor: waitingPause,
         partialResults: true,
         cancelOnError: true,
         onDevice: false,
@@ -327,6 +332,41 @@ class SpeechToTextRecognitionService
       event: 'stop_requested',
     );
     await _speech.stop();
+  }
+
+  @override
+  void changePauseFor({
+    required int sessionId,
+    required Duration pauseFor,
+  }) {
+    if (_activeSessionId != sessionId || !_speech.isListening) {
+      _logger.event(
+        sessionId: sessionId,
+        state: 'LISTENING',
+        event: 'pause_change_ignored_inactive_session',
+      );
+      return;
+    }
+    try {
+      _speech.changePauseFor(pauseFor);
+      _logger.event(
+        sessionId: sessionId,
+        state: 'LISTENING',
+        event: 'pause_timeout_changed_after_speech_start',
+        details: <String, Object?>{
+          'pauseForMs': pauseFor.inMilliseconds,
+        },
+      );
+    } on Object catch (error) {
+      // OpenCue's own VAD still calls stop() after sustained silence, so an
+      // unsupported late pause change must not fail the active utterance.
+      _logger.event(
+        sessionId: sessionId,
+        state: 'LISTENING',
+        event: 'pause_timeout_change_failed_ignored',
+        details: <String, Object?>{'message': error},
+      );
+    }
   }
 
   @override
