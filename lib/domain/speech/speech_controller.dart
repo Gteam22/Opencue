@@ -181,12 +181,11 @@ class SpeechController extends ChangeNotifier {
   /// Stops any current utterance.
   Future<void> stop() async {
     _generation++;
+    final wasSpeaking = _speakingLineId != null;
+    _speakingLineId = null;
+    _speakingKey = null;
+    if (wasSpeaking) notifyListeners();
     await _service.stop();
-    if (_speakingLineId != null) {
-      _speakingLineId = null;
-      _speakingKey = null;
-      notifyListeners();
-    }
   }
 
   @override

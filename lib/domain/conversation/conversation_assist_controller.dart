@@ -63,7 +63,7 @@ class ConversationAssistController extends ChangeNotifier {
     this.finalStatusWatchdogDuration = Duration.zero,
     this.processingTimeoutDuration = const Duration(seconds: 12),
     this.ttsReadinessTimeout = const Duration(seconds: 5),
-    this.ttsPlaybackTimeout = const Duration(seconds: 30),
+    this.ttsPlaybackTimeout = const Duration(seconds: 15),
     this.automaticRearmEnabled = true,
     this.listenButtonDebounce = const Duration(milliseconds: 350),
     this.postTtsAudioReleaseDelay = const Duration(milliseconds: 200),
@@ -153,6 +153,7 @@ class ConversationAssistController extends ChangeNotifier {
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
+  static const Duration nativeReleaseTimeout = Duration(seconds: 2);
 
   ConversationAssistPhase get phase => _phase;
   String get transcript => _transcript;
@@ -391,10 +392,12 @@ class ConversationAssistController extends ChangeNotifier {
     _setPhase(ConversationAssistPhase.starting);
     _armStartupWatchdog(sessionId);
     try {
-      final info = await _recognition.start(
-        sessionId: sessionId,
-        language: effectiveLanguage,
-      );
+      final info = await _recognition
+          .start(
+            sessionId: sessionId,
+            language: effectiveLanguage,
+          )
+          .timeout(startupWatchdogDuration);
       if (_activeSessionId != sessionId) return false;
       _recognitionLocale = info.localeId;
       _recognitionStrategy = info.strategy;
@@ -429,6 +432,7 @@ class ConversationAssistController extends ChangeNotifier {
       _startupWatchdog?.cancel();
       if (_activeSessionId != sessionId) return false;
       _activeSessionId = null;
+      unawaited(_cancelStalledSession(sessionId));
       _errorMessage = '$error';
       logger.event(
         sessionId: sessionId,
@@ -534,9 +538,16 @@ class ConversationAssistController extends ChangeNotifier {
           state: 'STOPPING',
           event: 'recognizer_cancel_requested',
         );
-        await _recognition.cancel(sessionId: sessionId);
+        await _recognition
+            .cancel(sessionId: sessionId)
+            .timeout(nativeReleaseTimeout);
       }
-      if (stopTts) await _speechController?.stop();
+      if (stopTts) {
+        final speech = _speechController;
+        if (speech != null) {
+          await speech.stop().timeout(nativeReleaseTimeout);
+        }
+      }
       logger.event(
         sessionId: sessionId ?? 0,
         state: 'IDLE',
@@ -564,9 +575,14 @@ class ConversationAssistController extends ChangeNotifier {
     _activeTurnId = ++_turnSequence;
     _activeSessionId = null;
     if (sessionId != null) {
-      await _recognition.cancel(sessionId: sessionId);
+      await _recognition
+          .cancel(sessionId: sessionId)
+          .timeout(nativeReleaseTimeout);
     }
-    await _speechController?.stop();
+    final speech = _speechController;
+    if (speech != null) {
+      await speech.stop().timeout(nativeReleaseTimeout);
+    }
     _suppressRecognition = false;
     _setSpeechState(
       ConversationSpeechState.idle,
@@ -632,7 +648,9 @@ class ConversationAssistController extends ChangeNotifier {
     _finalStatusWatchdog?.cancel();
     if (sessionId != null) {
       _activeSessionId = null;
-      await _recognition.cancel(sessionId: sessionId);
+      await _recognition
+          .cancel(sessionId: sessionId)
+          .timeout(nativeReleaseTimeout);
     }
     _setSpeechState(
       ConversationSpeechState.processing,
@@ -1871,7 +1889,16 @@ class ConversationAssistController extends ChangeNotifier {
           'timeoutMs': ttsPlaybackTimeout.inMilliseconds,
         },
       );
-      await speech.stop();
+      try {
+        await speech.stop().timeout(nativeReleaseTimeout);
+      } on Object catch (error) {
+        logger.turn(
+          turnId: turnId,
+          state: 'TTS_PLAYING',
+          event: 'TTS_FORCED_STOP_FAILED',
+          details: <String, Object?>{'error': error},
+        );
+      }
       return false;
     } finally {
       _autoTtsTurnId = null;
@@ -1893,14 +1920,35 @@ class ConversationAssistController extends ChangeNotifier {
     Duration audioReleaseDelay = Duration.zero,
   }) {
     if (!automaticRearmEnabled) {
-      _finishManualRecognitionTurn(turnId, reason: reason);
-      return Future<void>.value();
+      return _finishManualTurnAfterAudioRelease(
+        turnId,
+        reason: reason,
+        audioReleaseDelay: audioReleaseDelay,
+      );
     }
     return _armNextConversationTurn(
       turnId,
       reason: reason,
       audioReleaseDelay: audioReleaseDelay,
     );
+  }
+
+  Future<void> _finishManualTurnAfterAudioRelease(
+    int turnId, {
+    required String reason,
+    required Duration audioReleaseDelay,
+  }) async {
+    if (audioReleaseDelay > Duration.zero) {
+      _setSpeechState(
+        ConversationSpeechState.resuming,
+        0,
+        'one_shot_audio_release_wait',
+      );
+      _setPhase(ConversationAssistPhase.resuming);
+      await Future<void>.delayed(audioReleaseDelay);
+    }
+    if (_closed || !_listenModeEnabled || !_isCurrentTurn(turnId)) return;
+    _finishManualRecognitionTurn(turnId, reason: reason);
   }
 
   void _finishManualRecognitionTurn(
@@ -2426,7 +2474,9 @@ class ConversationAssistController extends ChangeNotifier {
 
   Future<void> _cancelStalledSession(int sessionId) async {
     try {
-      await _recognition.cancel(sessionId: sessionId);
+      await _recognition
+          .cancel(sessionId: sessionId)
+          .timeout(nativeReleaseTimeout);
     } on Object catch (error) {
       logger.event(
         sessionId: sessionId,

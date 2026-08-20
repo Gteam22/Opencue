@@ -545,6 +545,7 @@ void main() {
     final controller = ConversationAssistController(
       recognition: recognition,
       automaticRearmEnabled: false,
+      postTtsAudioReleaseDelay: Duration.zero,
     );
     addTearDown(controller.dispose);
     final reply = OpenerLine(
@@ -622,6 +623,7 @@ void main() {
     final controller = ConversationAssistController(
       recognition: recognition,
       automaticRearmEnabled: false,
+      postTtsAudioReleaseDelay: Duration.zero,
     );
     addTearDown(controller.dispose);
     final replies = List<OpenerLine>.generate(
@@ -696,6 +698,28 @@ void main() {
       logs.where((line) => line.contains('duplicate_press_ignored')),
       hasLength(2),
     );
+  });
+
+  test('a stalled native start cannot permanently lock the Listen button',
+      () async {
+    final recognition = FakeConversationRecognitionService()..holdNextStart();
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      startupWatchdogDuration: const Duration(milliseconds: 10),
+      automaticRearmEnabled: false,
+    );
+    addTearDown(recognition.finishStart);
+    addTearDown(controller.dispose);
+
+    await controller.toggleListenMode(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(controller.listenButtonTransitionLocked, isFalse);
+    expect(controller.listenModeActive, isFalse);
+    expect(recognition.cancelCount, 1);
   });
 
   test('imperfect Korean cute transcript still produces a response',
@@ -1722,6 +1746,7 @@ class FakeConversationRecognitionService
   int disposeCount = 0;
   int failStartsRemaining = 0;
   bool errorClientOnCancel = false;
+  Completer<void>? _startGate;
   int? currentSessionId;
   final List<int> sessionIds = <int>[];
   final List<ConversationInputLanguage> languages =
@@ -1729,6 +1754,14 @@ class FakeConversationRecognitionService
 
   @override
   bool get isSupported => true;
+
+  void holdNextStart() => _startGate = Completer<void>();
+
+  void finishStart() {
+    final gate = _startGate;
+    if (gate != null && !gate.isCompleted) gate.complete();
+    _startGate = null;
+  }
 
   @override
   Future<bool> initialize(ConversationRecognitionCallbacks callbacks) async {
@@ -1752,6 +1785,8 @@ class FakeConversationRecognitionService
       throw StateError('simulated recognizer busy during rearm');
     }
     callbacks!.onStatus(sessionId, 'listening');
+    final startGate = _startGate;
+    if (startGate != null) await startGate.future;
     return ConversationRecognitionStartInfo(
       requestedLanguage: language,
       localeId: switch (language) {

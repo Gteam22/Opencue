@@ -18,8 +18,12 @@ file to mention the current version.
   and a final transcript explicitly releases a recognizer whose terminal status
   is missing. Auto Speak attempts real playback when Android's voice-availability
   probe gives a false negative, and fresh TTS no longer begins with a redundant
-  cancellation. Current language support, response libraries, context, UI and
-  stored data are unchanged. TTS continues to omit emoji from spoken text.
+  cancellation. Native recognition start/cancel and forced TTS stop calls are
+  now bounded so a plugin Future cannot permanently lock the Listen control;
+  stale native listeners are cleaned before a new turn, and the one-shot path
+  observes a short post-TTS audio-release interval. Current language support,
+  response libraries, context, UI and stored data are unchanged. TTS continues
+  to omit emoji from spoken text.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or
   correcting a situation with one thumb. Hold the trigger and drag to select in
   one continuous gesture, or tap to pin the menu open and browse it. Eight root

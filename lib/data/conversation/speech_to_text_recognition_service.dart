@@ -87,6 +87,14 @@ class SpeechToTextRecognitionService
     if (!_available || _callbacks == null) {
       throw StateError('Speech recognition is not available.');
     }
+    if (_activeSessionId == null && _speech.isListening) {
+      _logger.event(
+        sessionId: sessionId,
+        state: 'STARTING',
+        event: 'stale_native_listener_cleanup',
+      );
+      await _speech.cancel().timeout(const Duration(seconds: 2));
+    }
     if (_activeSessionId != null || _speech.isListening) {
       _logger.event(
         sessionId: sessionId,
@@ -391,18 +399,21 @@ class SpeechToTextRecognitionService
   @override
   Future<void> cancel({required int sessionId}) async {
     if (_activeSessionId != sessionId) return;
+    final locale = _activeLocale;
     _logger.event(
       sessionId: sessionId,
       state: 'LISTENING',
       event: 'cancel_requested',
       details: <String, Object?>{
-        'language': _activeLocale,
+        'language': locale,
         'nativeCall': 'cancel',
       },
     );
-    await _speech.cancel();
-    if (_activeSessionId == sessionId) _activeSessionId = null;
+    // Invalidate Dart-side ownership before awaiting the native plugin. A
+    // stalled cancel Future must not keep every later turn permanently busy.
+    _activeSessionId = null;
     _activeLocale = null;
+    await _speech.cancel();
   }
 
   @override
