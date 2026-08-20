@@ -1,0 +1,87 @@
+name: opencue
+description: >-
+  A local, offline library of situationally appropriate conversation openers
+  with context-based recommendations.
+publish_to: "none"
+
+# Single source of truth for the version is version.txt.
+# tool/check_version.dart (run by `flutter test`) enforces that this value,
+# lib/core/app_info.dart and installer/opencue.iss all agree.
+version: 0.1.0+1
+
+environment:
+  # Color.withValues and the PopScope result callback both require the
+  # Flutter 3.27 / Dart 3.6 line, so the constraint states that rather than
+  # relying on CI happening to install something newer.
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # SQLite. sqflite_common_ffi provides the desktop (Windows/macOS/Linux)
+  # implementation; sqflite_common provides the shared, platform-independent
+  # API surface that the repositories are written against. Adding
+  # `sqflite` later gives the identical API on Android with no changes to
+  # lib/data/repositories.
+  sqflite_common: ^2.5.4
+  # Desktop (Windows/macOS/Linux) SQLite over FFI.
+  sqflite_common_ffi: ^2.3.3
+  # Android/iOS SQLite. Same sqflite_common API, so no repository changes.
+  # DatabasePlatform picks between this and the FFI factory at runtime.
+  sqflite: ^2.4.1
+
+  # Paths and the per-user application data directory.
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # Native open/save dialogs for JSON export and import.
+  file_selector: ^1.0.3
+
+  # --- Environmental scan (Android) -----------------------------------------
+  # Chosen deliberately; see "Package selection" in README.
+  #
+  # camera: the Flutter team's own plugin, actively maintained, and the only
+  # one with a first-party Windows implementation, so declaring it does not
+  # jeopardise the desktop build.
+  camera: ^0.11.0
+  #
+  # google_mlkit_image_labeling: on-device labelling from the maintained
+  # flutter-ml wrapper. Image labelling only - no face detection, no object
+  # detection, no OCR - because "what kind of place is this" is the only
+  # question the scan asks. Android/iOS only; ScanCapability keeps it from
+  # being constructed anywhere else. Not the deprecated Firebase ML APIs.
+  google_mlkit_image_labeling: ^0.14.0
+  #
+  # permission_handler: needed to distinguish "denied" from "denied forever",
+  # which the camera plugin alone cannot tell us, and which the two different
+  # permission screens depend on.
+  permission_handler: ^11.3.1
+
+  # --- Text-to-speech --------------------------------------------------------
+  # Wraps the device's own TTS engine (no voice data ships in the app). Used
+  # only on Android, behind the SpeechService interface: FlutterTtsSpeechService
+  # is constructed exclusively where SpeechCapability.hasImplementation is true,
+  # and a conditional import keeps the plugin out of the web build entirely.
+  # The Windows build binds NullSpeechService and never compiles against it,
+  # which is what stops a TTS plugin from breaking the desktop build the way an
+  # earlier native plugin did.
+  flutter_tts: ^4.2.0
+
+  # --- Conversation Assist -------------------------------------------------
+  # Short, user-triggered recognition through the device speech service. The
+  # app never writes microphone audio to disk; only the returned transcript is
+  # kept in the in-memory assist session. Wrapped behind our own interface so a
+  # future streaming/on-device recognizer can replace it without touching UI.
+  speech_to_text: ^7.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/sample/

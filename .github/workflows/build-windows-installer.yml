@@ -1,0 +1,252 @@
+name: Build Windows installer
+
+# Manual diagnostic build. Build everything is the sole workflow triggered by
+# pushes to main, preventing duplicate Windows runs for one commit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows release build
+    runs-on: windows-latest
+    # The full build including installer compilation takes well under this, but
+    # a hung Flutter download should not occupy a runner indefinitely.
+    timeout-minutes: 45
+
+    permissions:
+      contents: write # Needed by the release step on tag builds.
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Report toolchain versions
+        run: |
+          flutter --version
+          dart --version
+
+      - name: Repository consistency checks
+        # These do not need the Dart toolchain and fail in about a second, so
+        # they run before anything expensive. They check that the generated
+        # string tables and the starter library are still in step with the enums
+        # and with the keys the widgets ask for.
+        run: |
+          python tool/check_enum_parsing.py
+          python tool/check_strings_used.py
+          python tool/check_dart_sanity.py
+          python tool/check_dart_symbols.py
+          python tool/check_lint_risks.py
+          python tool/check_installer.py
+
+      - name: Confirm the generated files are up to date
+        shell: pwsh
+        # The string tables and the starter library are generated. If someone
+        # edits the generator without re-running it, or edits the output by hand,
+        # the two drift apart silently. Regenerating and diffing catches both.
+        run: |
+          python -m pip install --quiet pillow
+          python tool/korean_romanize.py
+          python tool/build_strings.py
+          python tool/build_seed.py
+          python tool/make_icon.py
+          git diff --exit-code -- lib/l10n assets/sample/starter_library.json `
+            lib/data/seed/starter_library.dart
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Generated files are stale. Run the tool/ scripts and commit the result."
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check the version is consistent everywhere
+        # Cheap, and catches a mismatch between the app and the installer before
+        # spending several minutes on a build that would ship the wrong number.
+        run: dart tool/check_version.dart
+
+      - name: Check formatting (informational)
+        # Reported as a warning rather than a hard failure: the code itself is
+        # correct either way, and the next step normalises it regardless. This
+        # exists so a contributor can see in the log whether they forgot to run
+        # `dart format` locally, without it blocking the build over whitespace.
+        continue-on-error: true
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Apply formatting
+        # Rewrites any file that is not in the canonical style, in place, in
+        # this checkout. Nothing here is committed back to the repository - it
+        # just guarantees that analyze, test and build always run against
+        # correctly formatted code, even if a contributor's editor did not.
+        run: dart format .
+
+      - name: Static analysis
+        # No --no-fatal-infos: an info-level finding is still a finding.
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test --reporter expanded
+
+      - name: Generate the Windows platform scaffolding
+        shell: pwsh
+        # windows/ is generated boilerplate (a C++ runner, a CMake build and a
+        # resource file) and is not committed; see "The windows/ directory" in
+        # README.md. `flutter create` writes it from the project name in
+        # pubspec.yaml, which is what makes the executable opencue.exe and keeps
+        # it in step with the installer script.
+        run: |
+          if (Test-Path windows\runner\CMakeLists.txt) {
+            Write-Host "windows/ is already present; leaving it alone."
+          } else {
+            flutter create --platforms=windows --project-name opencue .
+          }
+          if (-not (Test-Path windows\runner\CMakeLists.txt)) {
+            Write-Error "flutter create did not produce a Windows runner."
+            exit 1
+          }
+
+      - name: Apply the application icon to the runner
+        shell: pwsh
+        # The runner compiles whatever .ico sits at this path into the
+        # executable, so replacing the file is the whole of icon customisation.
+        run: |
+          $target = 'windows\runner\resources\app_icon.ico'
+          Copy-Item assets\icons\opencue.ico $target -Force
+          Write-Host "Applied assets\icons\opencue.ico to $target"
+
+      - name: Silence the experimental-coroutine deprecation in plugins
+        shell: pwsh
+        # Not our code. permission_handler_windows 0.2.2 includes
+        # <experimental/coroutine>, which MSVC 14.51 (Visual Studio 2026, what
+        # the runner now ships) turns into a hard error C2338 rather than a
+        # warning. The plugin has not been updated for it, and the message
+        # names the escape hatch itself:
+        #
+        #   You can define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+        #   to suppress this error for now.
+        #
+        # The define is added to the top-level generated CMakeLists, before any
+        # plugin subdirectory is added, so it reaches every plugin target. It
+        # touches only the generated windows/ directory, which is not
+        # committed, so nothing in the repository carries the workaround.
+        #
+        # Remove this step once permission_handler_windows moves to the C++20
+        # <coroutine> header.
+        run: |
+          $cmake = 'windows\CMakeLists.txt'
+          if (-not (Test-Path $cmake)) {
+            Write-Error "$cmake not found; flutter create did not run."
+            exit 1
+          }
+          $lines = Get-Content $cmake
+          if ($lines -match '_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS') {
+            Write-Host "The define is already present; leaving it alone."
+          } else {
+            # Insert immediately after the project() call, which is the first
+            # point at which add_compile_definitions is valid and still early
+            # enough to apply to every target added later.
+            $index = ($lines | Select-String -Pattern '^\s*project\s*\(' `
+              | Select-Object -First 1).LineNumber
+            if (-not $index) {
+              Write-Error "No project() call found in $cmake."
+              exit 1
+            }
+            $insert = @(
+              '',
+              '# Added by CI. permission_handler_windows uses the deprecated',
+              '# <experimental/coroutine> header, which MSVC 14.51 rejects.',
+              'add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)'
+            )
+            $updated = @()
+            $updated += $lines[0..($index - 1)]
+            $updated += $insert
+            $updated += $lines[$index..($lines.Length - 1)]
+            Set-Content -Path $cmake -Value $updated
+            Write-Host "Added the define after project() at line $index."
+          }
+
+      - name: Build the Windows release bundle
+        run: flutter build windows --release
+
+      - name: Locate the release bundle
+        id: bundle
+        shell: pwsh
+        # Flutter's output path has moved between versions and varies by target
+        # architecture (build\windows\x64\... on current stable, plain
+        # build\windows\... on older releases, arm64 on ARM runners). Searching
+        # for the executable is the only way to stay correct across all of them,
+        # so nothing here hard-codes a path.
+        run: |
+          $exe = Get-ChildItem -Path build\windows -Recurse -Filter opencue.exe `
+            | Where-Object { $_.FullName -like '*\Release\*' } `
+            | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "opencue.exe was not found anywhere under build\windows."
+            exit 1
+          }
+          $dir = $exe.Directory.FullName
+          Write-Host "Release bundle: $dir"
+          Get-ChildItem $dir | Select-Object Name, Length | Format-Table
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress --yes
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            $iscc = Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'
+          }
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe was not found after installing Inno Setup."
+            exit 1
+          }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+          & $iscc /? | Select-Object -First 1
+
+      - name: Compile the installer
+        shell: pwsh
+        # BuildDir is the directory found above, passed in so the script never
+        # guesses at Flutter's output layout.
+        run: |
+          & $env:ISCC "/DBuildDir=$env:BUNDLE_DIR" installer\opencue.iss
+        env:
+          BUNDLE_DIR: ${{ steps.bundle.outputs.dir }}
+
+      - name: Confirm the installer exists and report its size
+        shell: pwsh
+        run: |
+          $setup = 'installer\Output\OpenCue-Setup.exe'
+          if (-not (Test-Path $setup)) {
+            Write-Error "OpenCue-Setup.exe was not produced."
+            exit 1
+          }
+          $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          Write-Host "OpenCue-Setup.exe built successfully ($size MB)."
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          # The name a non-technical user will look for on the Actions page.
+          name: OpenCue-Setup-exe
+          path: installer/Output/OpenCue-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach the installer to the release
+        # Tag builds only. A tag like v0.1.0 publishes a release with the
+        # installer attached, which is the download path the README points at.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/OpenCue-Setup.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true

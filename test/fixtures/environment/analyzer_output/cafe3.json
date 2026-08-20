@@ -1,0 +1,27 @@
+{
+  "_note": [
+    "Hand-authored representation of analyzer output for Cafe3.jpg.",
+    "NOT produced by running ML Kit. See manifest.json."
+  ],
+  "imageQualityAdequate": true,
+  "ocrLines": [],
+  "labels": [
+    {"text": "drink", "confidence": 0.88},
+    {"text": "cup", "confidence": 0.84},
+    {"text": "person", "confidence": 0.92},
+    {"text": "table", "confidence": 0.71},
+    {"text": "coffee", "confidence": 0.69},
+    {"text": "window", "confidence": 0.61}
+  ],
+  "objects": [
+    {"canonical": "cup", "confidence": 0.86},
+    {"canonical": "coffee", "confidence": 0.70}
+  ],
+  "sceneScores": {"cafe": 62},
+  "personDetections": [
+    [0.95, 0.90],
+    [0.94, 0.91],
+    [0.95, 0.89]
+  ],
+  "flatSurfaces": 0
+}

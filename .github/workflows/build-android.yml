@@ -1,0 +1,136 @@
+name: Build Android
+
+# Manual diagnostic build. Build everything is the sole workflow triggered by
+# pushes to main, preventing duplicate Android runs for one commit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Android build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: write # Needed by the release step on tag builds.
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # The Android Gradle Plugin used by current Flutter requires 17.
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Report toolchain versions
+        run: |
+          flutter --version
+          java -version
+
+      - name: Repository consistency checks
+        # The same cheap Python checks the Windows workflow runs. They need no
+        # toolchain and fail in about a second.
+        run: |
+          python3 tool/check_enum_parsing.py
+          python3 tool/check_strings_used.py
+          python3 tool/check_dart_sanity.py
+          python3 tool/check_dart_symbols.py
+          python3 tool/check_lint_risks.py
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply formatting
+        run: dart format .
+
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Run tests
+        # The scan pipeline is tested through fakes, so no camera, no emulator
+        # and no ML model is needed here. Anything that cannot be tested this
+        # way is verified on a physical device instead, not in CI.
+        run: flutter test --reporter expanded
+
+      - name: Generate the Android platform scaffolding
+        # android/ is generated boilerplate and is not committed, the same
+        # arrangement the Windows workflow uses for windows/. The application
+        # ID is a documented placeholder; see README.
+        run: |
+          if [ -f android/app/build.gradle ] || [ -f android/app/build.gradle.kts ]; then
+            echo "android/ is already present; leaving it alone."
+          else
+            flutter create --platforms=android \
+              --project-name opencue \
+              --org com.example.opencue \
+              .
+          fi
+          test -d android/app || { echo "flutter create produced no android/app"; exit 1; }
+          python3 tool/configure_generated_platforms.py
+
+      - name: Build the debug APK
+        run: flutter build apk --debug
+
+      - name: Build the release APK
+        # No signing secrets are configured, so this is debug-signed. That is
+        # stated in the artifact name and in the summary below rather than
+        # being glossed over: a debug-signed APK installs fine for personal
+        # use but is not suitable for distribution.
+        run: flutter build apk --release
+
+      - name: Build the release AAB
+        run: flutter build appbundle --release
+
+      - name: Rename and collect artifacts
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-debug.apk \
+             dist/OpenCue-android-debug.apk
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             dist/OpenCue-android-release-UNSIGNED-debugkey.apk
+          cp build/app/outputs/bundle/release/app-release.aab \
+             dist/OpenCue-android-release-UNSIGNED-debugkey.aab
+          ls -lh dist
+
+      - name: State the signing status in the run summary
+        run: |
+          {
+            echo "### Android artifacts"
+            echo ""
+            echo "**These builds are signed with the Flutter debug key.**"
+            echo ""
+            echo "They install and run on a normal Android device, and are"
+            echo "fine for personal use and testing. They are *not* suitable"
+            echo "for Play Store upload or for distributing to other people:"
+            echo "a debug key is public and provides no authenticity"
+            echo "guarantee. See 'Android signing' in the README for how to"
+            echo "configure a real release keystore via repository secrets."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCue-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

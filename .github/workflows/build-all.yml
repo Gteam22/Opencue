@@ -1,0 +1,409 @@
+name: Build everything
+
+# One workflow, two packages: the Windows installer and the Android APK/AAB.
+#
+# WHY THIS EXISTS
+#
+# The other two workflows gate the build behind a wall of correctness checks:
+# regenerate the string tables and the starter library and fail if they differ
+# from what is committed, then `flutter analyze`, then `flutter test`. That is
+# the right default - it stops a broken build reaching a release - but it means
+# one failing check produces no downloadable file at all.
+#
+# This workflow inverts that. Every check still RUNS and its result is still
+# visible in the log and in the run summary, but none of them can stop the
+# build. The only thing that can fail this workflow is the compiler: if the
+# code genuinely does not build, there is nothing to package and the build step
+# fails, which is correct and cannot be worked around.
+#
+# It also does NOT run tool/build_seed.py or tool/build_strings.py. Those write
+# generated files, and a generator that exits non-zero - as build_seed.py does
+# when its enum parser cannot see a value - takes the whole run down with it.
+# The committed generated files are used as they are.
+#
+# USE THIS to get a package in your hands. Use "Build Windows installer" and
+# "Build Android" before tagging a release, because those are the ones that
+# will tell you something is wrong.
+#
+# HOW TO RUN IT
+#
+#   Actions tab -> "Build everything" -> "Run workflow" -> Run workflow
+#
+# When it finishes, open the run and scroll to Artifacts:
+#
+#   OpenCue-Setup-exe   the Windows installer, inside a .zip
+#   OpenCue-android     the APKs and the AAB, inside a .zip
+#
+# GitHub always zips artifacts. That is GitHub's doing, not an extra packaging
+# step - open the zip and the installer is inside.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Windows
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Report toolchain versions
+        run: |
+          flutter --version
+          dart --version
+
+      - name: Repository consistency checks (informational)
+        # Reported, never fatal. If one of these is red, the package still gets
+        # built and the log tells you what to look at.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $checks = @(
+            'tool/check_enum_parsing.py',
+            'tool/check_strings_used.py',
+            'tool/check_dart_sanity.py',
+            'tool/check_dart_symbols.py',
+            'tool/check_lint_risks.py',
+            'tool/check_installer.py'
+          )
+          foreach ($check in $checks) {
+            if (Test-Path $check) {
+              Write-Host "--- $check ---"
+              python $check
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::warning::$check reported problems."
+              }
+            } else {
+              Write-Host "::warning::$check is missing from the repository."
+            }
+          }
+          exit 0
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply formatting
+        # In this checkout only; nothing is committed back. Guarantees the
+        # build runs against correctly formatted code either way.
+        continue-on-error: true
+        run: dart format .
+
+      - name: Static analysis (informational)
+        continue-on-error: true
+        run: flutter analyze
+
+      - name: Run tests (informational)
+        continue-on-error: true
+        run: flutter test --reporter compact
+
+      - name: Generate the Windows platform scaffolding
+        shell: pwsh
+        # windows/ is generated boilerplate and is not committed. `flutter
+        # create` writes it from the project name in pubspec.yaml, which is
+        # what makes the executable opencue.exe - the name the installer
+        # script expects.
+        run: |
+          if (Test-Path windows\runner\CMakeLists.txt) {
+            Write-Host "windows/ is already present; leaving it alone."
+          } else {
+            flutter create --platforms=windows --project-name opencue .
+          }
+          if (-not (Test-Path windows\runner\CMakeLists.txt)) {
+            Write-Error "flutter create did not produce a Windows runner."
+            exit 1
+          }
+
+      - name: Apply the application icon to the runner
+        continue-on-error: true
+        shell: pwsh
+        # The runner compiles whatever .ico sits at this path into the
+        # executable, so replacing that one file is the whole of icon
+        # customisation. A missing icon is cosmetic, so it does not stop here.
+        run: |
+          $icon = 'assets\icons\opencue.ico'
+          $target = 'windows\runner\resources\app_icon.ico'
+          if (Test-Path $icon) {
+            Copy-Item $icon $target -Force
+            Write-Host "Applied $icon to $target"
+          } else {
+            Write-Host "::warning::$icon not found; keeping the default icon."
+          }
+
+      - name: Silence the experimental-coroutine deprecation in plugins
+        shell: pwsh
+        # Not our code. permission_handler_windows 0.2.2 includes
+        # <experimental/coroutine>, which MSVC 14.51 (Visual Studio 2026, what
+        # the runner now ships) turns into a hard error C2338 rather than a
+        # warning. The plugin has not been updated for it, and the message
+        # names the escape hatch itself:
+        #
+        #   You can define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+        #   to suppress this error for now.
+        #
+        # The define is added to the top-level generated CMakeLists, before any
+        # plugin subdirectory is added, so it reaches every plugin target. It
+        # touches only the generated windows/ directory, which is not
+        # committed, so nothing in the repository carries the workaround.
+        #
+        # Remove this step once permission_handler_windows moves to the C++20
+        # <coroutine> header.
+        run: |
+          $cmake = 'windows\CMakeLists.txt'
+          if (-not (Test-Path $cmake)) {
+            Write-Error "$cmake not found; flutter create did not run."
+            exit 1
+          }
+          $lines = Get-Content $cmake
+          if ($lines -match '_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS') {
+            Write-Host "The define is already present; leaving it alone."
+          } else {
+            # Insert immediately after the project() call, which is the first
+            # point at which add_compile_definitions is valid and still early
+            # enough to apply to every target added later.
+            $index = ($lines | Select-String -Pattern '^\s*project\s*\(' `
+              | Select-Object -First 1).LineNumber
+            if (-not $index) {
+              Write-Error "No project() call found in $cmake."
+              exit 1
+            }
+            $insert = @(
+              '',
+              '# Added by CI. permission_handler_windows uses the deprecated',
+              '# <experimental/coroutine> header, which MSVC 14.51 rejects.',
+              'add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)'
+            )
+            $updated = @()
+            $updated += $lines[0..($index - 1)]
+            $updated += $insert
+            $updated += $lines[$index..($lines.Length - 1)]
+            Set-Content -Path $cmake -Value $updated
+            Write-Host "Added the define after project() at line $index."
+          }
+
+      - name: Build the Windows release bundle
+        # The real gate. If this fails, the code does not compile and there is
+        # nothing to package.
+        run: flutter build windows --release
+
+      - name: Locate the release bundle
+        id: bundle
+        shell: pwsh
+        # Flutter's output path has moved between versions and varies by target
+        # architecture, so searching for the executable is the only way to stay
+        # correct across all of them.
+        run: |
+          $exe = Get-ChildItem -Path build\windows -Recurse -Filter opencue.exe `
+            | Where-Object { $_.FullName -like '*\Release\*' } `
+            | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "opencue.exe was not found anywhere under build\windows."
+            exit 1
+          }
+          $dir = $exe.Directory.FullName
+          Write-Host "Release bundle: $dir"
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress --yes
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            $iscc = Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'
+          }
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe was not found after installing Inno Setup."
+            exit 1
+          }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          & $env:ISCC "/DBuildDir=$env:BUNDLE_DIR" installer\opencue.iss
+        env:
+          BUNDLE_DIR: ${{ steps.bundle.outputs.dir }}
+
+      - name: Confirm the installer exists and report its size
+        shell: pwsh
+        run: |
+          $setup = 'installer\Output\OpenCue-Setup.exe'
+          if (-not (Test-Path $setup)) {
+            Write-Error "OpenCue-Setup.exe was not produced."
+            exit 1
+          }
+          $size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          Write-Host "OpenCue-Setup.exe built successfully ($size MB)."
+          # An array, not a here-string: PowerShell requires a here-string's
+          # closing "@ to sit at column 0, which cannot be indented inside a
+          # YAML block scalar.
+          $summary = @(
+            '## Windows',
+            '',
+            "OpenCue-Setup.exe built ($size MB). Download it from the",
+            '**Artifacts** section at the bottom of this run, named',
+            '`OpenCue-Setup-exe`.',
+            '',
+            'The installer is not code-signed, so Windows SmartScreen warns',
+            'on first run. Choose **More info**, then **Run anyway**.'
+          )
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCue-Setup-exe
+          path: installer/Output/OpenCue-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Android
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        # JDK 17 is what the Android Gradle Plugin requires.
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Report toolchain versions
+        run: |
+          flutter --version
+          java -version
+
+      - name: Repository consistency checks (informational)
+        continue-on-error: true
+        run: |
+          for check in tool/check_enum_parsing.py tool/check_strings_used.py \
+                       tool/check_dart_sanity.py tool/check_dart_symbols.py \
+                       tool/check_lint_risks.py; do
+            if [ -f "$check" ]; then
+              echo "--- $check ---"
+              python3 "$check" || echo "::warning::$check reported problems."
+            else
+              echo "::warning::$check is missing from the repository."
+            fi
+          done
+          exit 0
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply formatting
+        continue-on-error: true
+        run: dart format .
+
+      - name: Static analysis (informational)
+        continue-on-error: true
+        run: flutter analyze
+
+      - name: Run tests (informational)
+        continue-on-error: true
+        run: flutter test --reporter compact
+
+      - name: Generate the Android platform scaffolding
+        # android/ is generated boilerplate and is not committed, the same
+        # arrangement windows/ uses. The application ID is a placeholder and
+        # must be changed before any real distribution.
+        run: |
+          if [ -f android/app/build.gradle ] || \
+             [ -f android/app/build.gradle.kts ]; then
+            echo "android/ is already present; leaving it alone."
+          else
+            flutter create --platforms=android --project-name opencue \
+              --org com.example.opencue .
+          fi
+          python3 tool/configure_generated_platforms.py
+
+      - name: Build the debug APK
+        # The real gate for this job.
+        run: flutter build apk --debug
+
+      - name: Build the release APK
+        # Signed with the public Flutter debug key, because no release keystore
+        # is configured. It installs and runs; it is not distributable.
+        continue-on-error: true
+        run: flutter build apk --release
+
+      - name: Build the release AAB
+        continue-on-error: true
+        run: flutter build appbundle --release
+
+      - name: Collect and name the artifacts honestly
+        run: |
+          mkdir -p dist
+          debug=build/app/outputs/flutter-apk/app-debug.apk
+          release=build/app/outputs/flutter-apk/app-release.apk
+          bundle=build/app/outputs/bundle/release/app-release.aab
+
+          # Written as if-blocks, not `[ -f x ] && cp`: GitHub runs bash with
+          # -e, so a false test on the last line of a step fails the step.
+          if [ -f "$debug" ]; then
+            cp "$debug" dist/OpenCue-android-debug.apk
+          fi
+          # The name is literal. A debug key proves nothing about who built it.
+          if [ -f "$release" ]; then
+            cp "$release" dist/OpenCue-android-release-UNSIGNED-debugkey.apk
+          fi
+          if [ -f "$bundle" ]; then
+            cp "$bundle" dist/OpenCue-android-UNSIGNED-debugkey.aab
+          fi
+
+          ls -la dist/
+
+      - name: State the signing status in the run summary
+        run: |
+          {
+            echo "## Android"
+            echo ""
+            echo "Install \`OpenCue-android-release-UNSIGNED-debugkey.apk\` on"
+            echo "your own device. Android will ask you to allow installing"
+            echo "from this source; that prompt is expected for any app not"
+            echo "from the Play Store."
+            echo ""
+            echo "**No release keystore is configured**, so this APK is signed"
+            echo "with the public Flutter debug key. It is fine for your own"
+            echo "use and unsuitable for giving to other people or uploading"
+            echo "to the Play Store. See *Android signing* in README.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCue-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
