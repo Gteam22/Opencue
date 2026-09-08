@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,7 +22,8 @@ class ConversationAssistScreen extends StatefulWidget {
       _ConversationAssistScreenState();
 }
 
-class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
+class _ConversationAssistScreenState extends State<ConversationAssistScreen>
+    with WidgetsBindingObserver {
   late final ConversationAssistController _controller;
   final TextEditingController _transcript = TextEditingController();
   final FocusNode _transcriptFocus = FocusNode();
@@ -30,13 +33,27 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = ConversationAssistController(
       recognition: SpeechToTextRecognitionService(),
-      // FU reliability baseline: one tap owns one complete exchange. A fresh
-      // recognizer is created only after the user asks for the next turn,
-      // avoiding Android recognizer-busy and TTS/audio-session races.
-      automaticRearmEnabled: false,
+      // FU2 behavior: one tap enables the foreground conversation loop. Every
+      // native recognition turn remains isolated and is rearmed only after
+      // response generation, TTS completion, and audio-focus release.
+      automaticRearmEnabled: true,
     )..addListener(_onControllerChanged);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        unawaited(_controller.resumeAfterAppLifecycle());
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        unawaited(_controller.suspendForAppLifecycle());
+    }
   }
 
   @override
@@ -66,6 +83,7 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     _transcript.dispose();
@@ -120,8 +138,7 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
                 _ListenPanel(
                   controller: _controller,
                   onToggle: _listen,
-                  showDiagnostics:
-                      AppScope.of(context).settings.developerMode,
+                  showDiagnostics: AppScope.of(context).settings.developerMode,
                 ),
                 _AutoSpeakControl(
                   value: AppScope.of(context)
@@ -159,8 +176,7 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
                   onAdultChanged: _setAdultContent,
                 ),
                 const SizedBox(height: 20),
-                if (_controller.phase ==
-                    ConversationAssistPhase.understanding)
+                if (_controller.phase == ConversationAssistPhase.understanding)
                   const Center(child: CircularProgressIndicator()),
                 if (_controller.result != null)
                   _Suggestions(
@@ -237,8 +253,7 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
       adultContentEnabled: enabled,
       maxBoldness: enabled
           ? _preferences.maxBoldness
-          : (_preferences.maxBoldness.index >
-                  ConversationBoldness.flirty.index
+          : (_preferences.maxBoldness.index > ConversationBoldness.flirty.index
               ? ConversationBoldness.flirty
               : _preferences.maxBoldness),
     );
@@ -253,8 +268,7 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen> {
   }
 
   Future<void> _acceptSuggestion(OpenerLine line) async {
-    if (_controller.feedbackFor(line.id) ==
-        SuggestionFeedbackKind.accepted) {
+    if (_controller.feedbackFor(line.id) == SuggestionFeedbackKind.accepted) {
       return;
     }
     _controller.acceptSuggestion(line.id);
@@ -285,16 +299,13 @@ class _ListenPanel extends StatelessWidget {
     final theme = Theme.of(context);
     final listening = controller.listenModeActive;
     final phase = controller.phase;
-    final listenButtonEnabled =
-        phase != ConversationAssistPhase.initializing &&
-            !controller.listenButtonTransitionLocked &&
-            (listening ||
-                controller.speechState == ConversationSpeechState.idle);
+    final listenButtonEnabled = phase != ConversationAssistPhase.initializing &&
+        !controller.listenButtonTransitionLocked &&
+        (listening || controller.speechState == ConversationSpeechState.idle);
     final status = switch (phase) {
       ConversationAssistPhase.idle => strings.t('assist.ready'),
       ConversationAssistPhase.initializing => strings.t('assist.initializing'),
-      ConversationAssistPhase.starting =>
-        strings.t('assist.startingListener'),
+      ConversationAssistPhase.starting => strings.t('assist.startingListener'),
       ConversationAssistPhase.waitingForSpeech =>
         strings.t('assist.waitingForSpeech'),
       ConversationAssistPhase.hearingSpeech =>
@@ -319,7 +330,7 @@ class _ListenPanel extends StatelessWidget {
     final partialTranscript = controller.partialTranscript;
     final finalTranscript = controller.finalTranscript;
     final diagnosticText = <String>[
-      'Mode: FU_ONE_SHOT',
+      'Mode: FU2_CONTINUOUS_CONVERSATION',
       'MIC OWNER: ${controller.microphoneOwner}',
       'AUDIO INPUT ACTIVE: '
           '${controller.audioInputActive ? 'YES' : 'NO'}',
@@ -351,9 +362,7 @@ class _ListenPanel extends StatelessWidget {
                   padding: EdgeInsets.zero,
                 ),
                 child: Icon(
-                  listening
-                      ? Icons.stop_rounded
-                      : Icons.mic_rounded,
+                  listening ? Icons.stop_rounded : Icons.mic_rounded,
                   size: 30,
                 ),
               ),
@@ -430,9 +439,7 @@ class _AutoSpeakControl extends StatelessWidget {
         title: Text(AppScope.strings(context).t('assist.autoSpeak')),
         subtitle: Text(
           AppScope.strings(context).t(
-            enabled
-                ? 'assist.autoSpeakHint'
-                : 'assist.autoSpeakUnavailable',
+            enabled ? 'assist.autoSpeakHint' : 'assist.autoSpeakUnavailable',
           ),
         ),
         value: enabled && value,
@@ -751,9 +758,8 @@ class _SuggestionCard extends StatelessWidget {
                         null => strings.t('assist.reel.standard'),
                       },
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                     const SizedBox(height: 4),

@@ -1,7 +1,7 @@
 # OpenCue
 
 A multilingual conversation assistant and curated Japanese/Korean line library.
-Tap **Listen** for one reliable exchange: OpenCue transcribes the utterance,
+Tap **Listen** once to start a hands-free foreground conversation: OpenCue transcribes each utterance,
 detects Japanese, Korean or English, then suggests three
 relevant replies in your chosen output-language mode. Manual situation
 recommendations and the environmental Scan remain available as secondary tools.
@@ -11,8 +11,8 @@ recommendation engine. You describe the situation you are actually in, and
 OpenCue suggests a few lines that fit it — or tells you that this is probably not
 a good moment to say anything.
 
-There is no account or OpenCue server. Listening runs only for the foreground
-turn started by a tap, and OpenCue never writes raw microphone audio to disk. The
+There is no account or OpenCue server. Listening runs only while foreground
+Listen Mode is enabled, and OpenCue never writes raw microphone audio to disk. The
 operating-system speech service decides whether recognition is local or uses
 its configured provider. Camera access is confined to the optional Scan tool.
 
@@ -24,7 +24,7 @@ its configured provider. Camera access is confined to the optional Scan tool.
 
 - Holds a library of openers, each with the Japanese line and its English
   meaning, plus the situations it suits and the situations it does not.
-- Transcribes one incoming utterance for each Listen tap and
+- Transcribes consecutive incoming utterances after one Listen tap and
   ranks approximately three library-backed replies by meaning, topic, usage
   type, tone and the user's manually selected boldness.
 - Lets you describe where you are and what you can see, and returns up to three
@@ -42,8 +42,9 @@ its configured provider. Camera access is confined to the optional Scan tool.
 - It never guarantees a reception, and it does not score or rate other people.
 - It stores nothing about anyone's appearance, availability, or interest — only
   the situation you typed in.
-- It never listens in the background. One tap starts one recognition turn; its
-  final result, Stop, or leaving the screen releases the microphone. The
+- It never listens in the background. One tap enables foreground Listen Mode;
+  every utterance has a separate recognition session, and Stop or leaving the
+  foreground releases the microphone. The
   transient transcript history is cleared with the screen.
 - Adult suggestions are off by default and never activate from time, place,
   proximity or alcohol. They require explicit opt-in and a manual boldness
@@ -161,8 +162,10 @@ through the same normalize, classify and cue pipeline used by a confirmed
 manual transcript. Stop immediately invalidates the session, calls recognizer
 cancel and returns the UI to idle; callbacks from that session are ignored.
 Optional TTS begins only after the recognizer is terminal. When playback ends,
-the app returns to idle for the next tap. The microphone and TTS never own audio
-at the same time. Automatic input uses the device recognizer independently of
+the app waits briefly for audio focus to release and automatically starts the
+next isolated recognition turn. The microphone and TTS never own audio at the
+same time. Transient recognition failures and silent stalled sessions release
+their audio owner and rearm with bounded backoff. Automatic input uses the device recognizer independently of
 the selected output language; explicit Japanese, Korean and English input modes
 remain available.
 Duplicate finals and low-value acknowledgments preserve the existing cues. A
@@ -294,7 +297,7 @@ is production-ready.
 ### Conversation Assist pipeline
 
 ```text
-Listen tap -> one session ID -> streaming partial text
+Listen tap -> Listen Mode ON -> one session ID -> streaming partial text
             -> native terminal status
             -> finalized utterance + monotonic turn ID
             -> script language detection (JA / KO / EN)
@@ -302,8 +305,8 @@ Listen tap -> one session ID -> streaming partial text
             -> adult/boldness safety filter
             -> primary curated-library response -> display / optional TTS
             -> same-intent Standard / Humorous / Flirty variants
-            -> optional TTS completion -> audio release -> IDLE
-            -> next Listen tap starts a fresh exchange
+            -> optional TTS completion -> audio release -> fresh session ID
+            -> repeat until Stop or the app leaves the foreground
 ```
 
 `ConversationRecognitionService` isolates platform capture, and

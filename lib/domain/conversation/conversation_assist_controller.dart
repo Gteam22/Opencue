@@ -54,13 +54,14 @@ class ConversationAssistController extends ChangeNotifier {
   ConversationAssistController({
     required ConversationRecognitionService recognition,
     this.responseEngine = const ConversationResponseEngine(),
-    this.semanticClassifier =
-        const NullConversationSemanticIntentClassifier(),
+    this.semanticClassifier = const NullConversationSemanticIntentClassifier(),
     this.normalizer = const TranscriptNormalizer(),
     this.languageDetector = const ConversationLanguageDetector(),
     this.logger = const ConversationSpeechLogger(),
     this.startupWatchdogDuration = const Duration(seconds: 8),
-    this.finalStatusWatchdogDuration = Duration.zero,
+    this.recognitionSessionTimeout = const Duration(seconds: 35),
+    this.finalStatusWatchdogDuration = const Duration(milliseconds: 750),
+    this.finalResultWaitDuration = const Duration(milliseconds: 2500),
     this.processingTimeoutDuration = const Duration(seconds: 12),
     this.ttsReadinessTimeout = const Duration(seconds: 5),
     this.ttsPlaybackTimeout = const Duration(seconds: 15),
@@ -77,7 +78,9 @@ class ConversationAssistController extends ChangeNotifier {
   final ConversationLanguageDetector languageDetector;
   final ConversationSpeechLogger logger;
   final Duration startupWatchdogDuration;
+  final Duration recognitionSessionTimeout;
   final Duration finalStatusWatchdogDuration;
+  final Duration finalResultWaitDuration;
   final Duration processingTimeoutDuration;
   final Duration ttsReadinessTimeout;
   final Duration ttsPlaybackTimeout;
@@ -92,8 +95,7 @@ class ConversationAssistController extends ChangeNotifier {
   double _confidence = 0;
   double _soundLevel = 0;
   ConversationSuggestionResult? _result;
-  ConversationInputLanguage inputLanguage =
-      ConversationInputLanguage.automatic;
+  ConversationInputLanguage inputLanguage = ConversationInputLanguage.automatic;
   ConversationPreferences preferences = const ConversationPreferences();
   List<OpenerLine> _library = const <OpenerLine>[];
   final List<ConversationTurn> _history = <ConversationTurn>[];
@@ -128,6 +130,7 @@ class ConversationAssistController extends ChangeNotifier {
   int _sessionSequence = 0;
   int? _activeSessionId;
   Timer? _startupWatchdog;
+  Timer? _recognitionSessionWatchdog;
   Timer? _finalStatusWatchdog;
   Timer? _processingWatchdog;
   int? _processingWatchdogTurnId;
@@ -150,6 +153,11 @@ class ConversationAssistController extends ChangeNotifier {
   Completer<void>? _rearmDelayCompleter;
   int _rearmGeneration = 0;
   int _consecutiveRecognitionRecoveries = 0;
+  Future<void>? _responseGenerationOperation;
+  int? _responseGenerationSessionId;
+  bool _lastStartFailureRetryable = true;
+  bool _suspendedForAppLifecycle = false;
+  bool _resumeAfterAppLifecycle = false;
 
   static const Duration duplicateSuppressionWindow = Duration(seconds: 2);
   static const double semanticFallbackThreshold = 0.62;
@@ -173,7 +181,8 @@ class ConversationAssistController extends ChangeNotifier {
         ConversationSpeechState.readyForSpeech ||
         ConversationSpeechState.speechDetected ||
         ConversationSpeechState.capturingUtterance ||
-        ConversationSpeechState.finalizing => true,
+        ConversationSpeechState.finalizing =>
+          true,
         _ => false,
       };
   bool get listenModeActive => _listenModeEnabled;
@@ -392,6 +401,7 @@ class ConversationAssistController extends ChangeNotifier {
     _setPhase(ConversationAssistPhase.starting);
     _armStartupWatchdog(sessionId);
     try {
+      _lastStartFailureRetryable = true;
       final info = await _recognition
           .start(
             sessionId: sessionId,
@@ -408,10 +418,8 @@ class ConversationAssistController extends ChangeNotifier {
         details: <String, Object?>{
           'recognitionLanguage': info.localeId,
           'strategy': info.strategy,
-          'languageDetectionSupported':
-              info.nativeLanguageDetectionSupported,
-          'languageSwitchingSupported':
-              info.nativeLanguageSwitchingSupported,
+          'languageDetectionSupported': info.nativeLanguageDetectionSupported,
+          'languageSwitchingSupported': info.nativeLanguageSwitchingSupported,
         },
       );
       if (info.localeId.replaceAll('_', '-').toLowerCase().startsWith('ko-')) {
@@ -430,9 +438,11 @@ class ConversationAssistController extends ChangeNotifier {
       return true;
     } on Object catch (error) {
       _startupWatchdog?.cancel();
+      _recognitionSessionWatchdog?.cancel();
       if (_activeSessionId != sessionId) return false;
       _activeSessionId = null;
-      unawaited(_cancelStalledSession(sessionId));
+      _lastStartFailureRetryable = error is! UnsupportedError;
+      await _cancelStalledSession(sessionId);
       _errorMessage = '$error';
       logger.event(
         sessionId: sessionId,
@@ -441,6 +451,7 @@ class ConversationAssistController extends ChangeNotifier {
         details: <String, Object?>{
           'message': error,
           'isRearm': resumedFromTurnId != null,
+          'retryable': _lastStartFailureRetryable,
           'listenModeEnabled': _listenModeEnabled,
         },
       );
@@ -475,8 +486,7 @@ class ConversationAssistController extends ChangeNotifier {
   Future<void> stop() async {
     final sessionId = _activeSessionId;
     if (!listenModeActive && sessionId == null) return;
-    final wasTtsPlaying =
-        _speechState == ConversationSpeechState.ttsPlaying;
+    final wasTtsPlaying = _speechState == ConversationSpeechState.ttsPlaying;
     logger.event(
       sessionId: sessionId ?? 0,
       state: _speechState.name.toUpperCase(),
@@ -493,12 +503,14 @@ class ConversationAssistController extends ChangeNotifier {
     _resumingFromTurnId = null;
     _resumeRequestedAt = null;
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
     _clearProcessingWatchdog();
     _activeSessionId = null;
     _activeTurnId = ++_turnSequence;
     _pendingVariantResult = null;
     _pendingVariantTurnId = null;
+    _invalidateResponseGeneration('stop_pressed');
     _nativeRecognitionStatus = 'CANCELLED_BY_USER';
     _setSpeechState(
       ConversationSpeechState.stopping,
@@ -563,9 +575,59 @@ class ConversationAssistController extends ChangeNotifier {
     }
   }
 
+  /// Releases microphone/TTS ownership while the app is not in the foreground.
+  /// A foreground Listen Mode session is remembered and restarted only after
+  /// cleanup has completed, so lifecycle callbacks cannot overlap audio owners.
+  Future<void> suspendForAppLifecycle() async {
+    if (_closed || _suspendedForAppLifecycle) return;
+    _suspendedForAppLifecycle = true;
+    _resumeAfterAppLifecycle = _listenModeEnabled;
+    logger.event(
+      sessionId: _activeSessionId ?? 0,
+      state: _speechState.name.toUpperCase(),
+      event: 'app_backgrounded',
+      details: <String, Object?>{
+        'resumeOnForeground': _resumeAfterAppLifecycle,
+      },
+    );
+    if (_listenModeEnabled ||
+        _activeSessionId != null ||
+        _speechState == ConversationSpeechState.ttsPlaying) {
+      await stop();
+    }
+  }
+
+  /// Restores a Listen Mode session that was active before backgrounding.
+  Future<void> resumeAfterAppLifecycle() async {
+    if (_closed || !_suspendedForAppLifecycle) return;
+    _suspendedForAppLifecycle = false;
+    final shouldResume = _resumeAfterAppLifecycle;
+    _resumeAfterAppLifecycle = false;
+    if (!shouldResume) return;
+    final cleanup = _recognitionCleanup;
+    if (cleanup != null) await cleanup;
+    if (_closed || _listenModeEnabled) return;
+    logger.event(
+      sessionId: 0,
+      state: 'IDLE',
+      event: 'app_foregrounded_restarting_listener',
+    );
+    await start(
+      library: _library,
+      preferences: preferences,
+      speechController: _speechController,
+      autoSpeak: _autoSpeak,
+      outputLanguageMode: _outputLanguageMode,
+      speechRate: _speechRate,
+      japaneseTtsEnabled: _japaneseTtsEnabled,
+      koreanTtsEnabled: _koreanTtsEnabled,
+    );
+  }
+
   Future<void> cancel() async {
     final sessionId = _activeSessionId;
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
     _clearProcessingWatchdog();
     _listenModeEnabled = false;
@@ -574,6 +636,7 @@ class ConversationAssistController extends ChangeNotifier {
     _resumeRequestedAt = null;
     _activeTurnId = ++_turnSequence;
     _activeSessionId = null;
+    _invalidateResponseGeneration('cancel_requested');
     if (sessionId != null) {
       await _recognition
           .cancel(sessionId: sessionId)
@@ -645,6 +708,7 @@ class ConversationAssistController extends ChangeNotifier {
     _cancelPendingRearm('manual_transcript');
     if (pendingRearm != null) await pendingRearm;
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
     if (sessionId != null) {
       _activeSessionId = null;
@@ -887,12 +951,15 @@ class ConversationAssistController extends ChangeNotifier {
       details: <String, Object?>{
         'durationMs': generationTimer.elapsedMilliseconds,
         'relevant': relevant,
+        'intentId': nextResult.interpretation.primaryIntentId,
+        'intentConfidence': nextResult.interpretation.intentConfidence,
+        'candidateCount': nextResult.candidateCount,
+        'suggestionCount': nextResult.suggestions.length,
       },
     );
 
-    final intentId = relevant
-        ? nextResult.interpretation.primaryIntentId!
-        : 'unknown';
+    final intentId =
+        relevant ? nextResult.interpretation.primaryIntentId! : 'unknown';
     _recordTurn(
       transcript: trimmed,
       language: nextResult.interpretation.language,
@@ -956,11 +1023,11 @@ class ConversationAssistController extends ChangeNotifier {
           : CueUpdateAction.preservedIrrelevant,
       source: source,
       createdAt: now,
-      matcherReasons: nextResult.interpretation.primaryIntent?.reasons ??
-          const <String>[],
-      responseHints: nextResult
-              .interpretation.primaryIntent?.definition.responseHints ??
-          const <String>[],
+      matcherReasons:
+          nextResult.interpretation.primaryIntent?.reasons ?? const <String>[],
+      responseHints:
+          nextResult.interpretation.primaryIntent?.definition.responseHints ??
+              const <String>[],
       topResponseScores: <String, double>{
         for (final suggestion in nextResult.suggestions)
           suggestion.line.id: suggestion.score,
@@ -1042,8 +1109,7 @@ class ConversationAssistController extends ChangeNotifier {
         ConversationAssistPhase.hearingSpeech,
       ConversationSpeechState.capturingUtterance =>
         ConversationAssistPhase.capturingUtterance,
-      ConversationSpeechState.finalizing =>
-        ConversationAssistPhase.finalizing,
+      ConversationSpeechState.finalizing => ConversationAssistPhase.finalizing,
       ConversationSpeechState.processing =>
         ConversationAssistPhase.understanding,
       ConversationSpeechState.primaryReady =>
@@ -1051,7 +1117,8 @@ class ConversationAssistController extends ChangeNotifier {
       ConversationSpeechState.stopping => ConversationAssistPhase.stopping,
       ConversationSpeechState.ttsPlaying => ConversationAssistPhase.speaking,
       ConversationSpeechState.resuming => ConversationAssistPhase.resuming,
-      ConversationSpeechState.idle || ConversationSpeechState.error =>
+      ConversationSpeechState.idle ||
+      ConversationSpeechState.error =>
         ConversationAssistPhase.suggestions,
     });
   }
@@ -1071,8 +1138,8 @@ class ConversationAssistController extends ChangeNotifier {
   Map<String, String> _ttsTexts(ConversationSuggestionResult result) =>
       <String, String>{
         for (final suggestion in result.suggestions)
-          suggestion.line.id: const TtsTextSanitizer()
-              .sanitize(suggestion.line.japaneseText),
+          suggestion.line.id:
+              const TtsTextSanitizer().sanitize(suggestion.line.japaneseText),
       };
 
   bool _isRelevant(ConversationSuggestionResult candidate) {
@@ -1126,8 +1193,7 @@ class ConversationAssistController extends ChangeNotifier {
     if (_history.length > 12) _history.removeRange(12, _history.length);
   }
 
-  SuggestionFeedbackKind? feedbackFor(String lineId) =>
-      _latestFeedback[lineId];
+  SuggestionFeedbackKind? feedbackFor(String lineId) => _latestFeedback[lineId];
 
   void acceptSuggestion(String lineId) {
     if (_latestFeedback[lineId] == SuggestionFeedbackKind.accepted) return;
@@ -1156,8 +1222,7 @@ class ConversationAssistController extends ChangeNotifier {
     while (_feedback.length > 60) _feedback.removeAt(0);
   }
 
-  bool _isCurrentTurn(int turnId) =>
-      !_closed && turnId == _activeTurnId;
+  bool _isCurrentTurn(int turnId) => !_closed && turnId == _activeTurnId;
 
   (String, double)? _mostRecentIncomingIntent() {
     for (final turn in _history) {
@@ -1166,9 +1231,8 @@ class ConversationAssistController extends ChangeNotifier {
           turn.detectedIntent == 'no_action') {
         continue;
       }
-      final confidence = ((turn.confidence ?? 0.75) * 0.92)
-          .clamp(0.68, 0.92)
-          .toDouble();
+      final confidence =
+          ((turn.confidence ?? 0.75) * 0.92).clamp(0.68, 0.92).toDouble();
       return (turn.detectedIntent!, confidence);
     }
     return null;
@@ -1204,8 +1268,8 @@ class ConversationAssistController extends ChangeNotifier {
     String? languageCode,
   }) {
     OpenerLine? line;
-    for (final suggestion in _result?.suggestions ??
-        const <ConversationSuggestion>[]) {
+    for (final suggestion
+        in _result?.suggestions ?? const <ConversationSuggestion>[]) {
       if (suggestion.line.id == lineId) {
         line = suggestion.line;
         break;
@@ -1222,11 +1286,8 @@ class ConversationAssistController extends ChangeNotifier {
     if (line == null) return;
     final korean = line.koreanText;
     final useKorean = languageCode == SpeechController.koreanLocale ||
-        (languageCode == null &&
-            _outputLanguageMode == LanguageMode.korean);
-    final transcript = useKorean &&
-            korean != null &&
-            korean.trim().isNotEmpty
+        (languageCode == null && _outputLanguageMode == LanguageMode.korean);
+    final transcript = useKorean && korean != null && korean.trim().isNotEmpty
         ? korean
         : line.japaneseText;
     _recordTurn(
@@ -1240,9 +1301,55 @@ class ConversationAssistController extends ChangeNotifier {
     );
   }
 
+  Future<void> _scheduleSpeechSessionCompletion(
+    int sessionId,
+    String text,
+  ) {
+    final existing = _responseGenerationOperation;
+    if (existing != null) {
+      logger.event(
+        sessionId: sessionId,
+        state: _speechState.name.toUpperCase(),
+        event: _responseGenerationSessionId == sessionId
+            ? 'duplicate_response_generation_ignored'
+            : 'response_generation_busy_stale_session_ignored',
+        details: <String, Object?>{
+          'activeGenerationSession': _responseGenerationSessionId,
+        },
+      );
+      return existing;
+    }
+    if (_activeSessionId != sessionId || _closed) {
+      return Future<void>.value();
+    }
+    late final Future<void> operation;
+    operation = _completeSpeechSession(sessionId, text);
+    _responseGenerationSessionId = sessionId;
+    _responseGenerationOperation = operation;
+    return operation.whenComplete(() {
+      if (identical(_responseGenerationOperation, operation)) {
+        _responseGenerationOperation = null;
+        _responseGenerationSessionId = null;
+      }
+    });
+  }
+
+  void _invalidateResponseGeneration(String reason) {
+    if (_responseGenerationOperation == null) return;
+    logger.event(
+      sessionId: _responseGenerationSessionId ?? 0,
+      state: _speechState.name.toUpperCase(),
+      event: 'response_generation_invalidated',
+      details: <String, Object?>{'reason': reason},
+    );
+    _responseGenerationOperation = null;
+    _responseGenerationSessionId = null;
+  }
+
   Future<void> _completeSpeechSession(int sessionId, String text) async {
     if (_activeSessionId != sessionId || _closed) return;
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
     _activeSessionId = null;
     _nativeRecognitionStatus = 'TERMINAL';
@@ -1414,9 +1521,8 @@ class ConversationAssistController extends ChangeNotifier {
         if (_isCurrentTurn(turnId) && _listenModeEnabled) {
           await _resumeListening(
             turnId,
-            reason: ttsCompleted
-                ? 'tts_completion'
-                : 'tts_unavailable_or_failed',
+            reason:
+                ttsCompleted ? 'tts_completion' : 'tts_unavailable_or_failed',
             audioReleaseDelay:
                 ttsCompleted ? postTtsAudioReleaseDelay : Duration.zero,
           );
@@ -1434,9 +1540,7 @@ class ConversationAssistController extends ChangeNotifier {
         if (_listenModeEnabled) {
           await _resumeListening(
             turnId,
-            reason: _autoSpeak
-                ? 'no_primary_response'
-                : 'auto_speak_off',
+            reason: _autoSpeak ? 'no_primary_response' : 'auto_speak_off',
           );
         } else {
           _setSpeechState(
@@ -1505,7 +1609,11 @@ class ConversationAssistController extends ChangeNotifier {
   ) {
     if (_activeSessionId != sessionId || _suppressRecognition) return;
     _startupWatchdog?.cancel();
-    if (text.trim().isNotEmpty) _transcript = text.trim();
+    if (text.trim().isNotEmpty) {
+      _transcript = text.trim();
+      _consecutiveRecognitionRecoveries = 0;
+    }
+    if (isFinal) _recognitionSessionWatchdog?.cancel();
     _lastResultWasFinal = isFinal;
     _confidence = confidence;
     _nativeRecognitionStatus = isFinal ? 'FINAL_RESULT' : 'PARTIAL_RESULT';
@@ -1549,7 +1657,7 @@ class ConversationAssistController extends ChangeNotifier {
         }
       }
       // A final transcript is not the native terminal signal. Keep this
-      // session token until `done`/`notListening` so the next tap cannot race
+      // session token until `done` so the next turn cannot race
       // an Android recognizer that is still releasing its audio resources.
       _setSpeechState(
         ConversationSpeechState.finalizing,
@@ -1654,13 +1762,34 @@ class ConversationAssistController extends ChangeNotifier {
       // however, and some recognizers never emit RMS callbacks in silence.
       // Keep the conservative STARTING UI but do not cancel a valid listener.
       _startupWatchdog?.cancel();
+      _armRecognitionSessionWatchdog(sessionId);
       notifyListeners();
       return;
     }
-    if (status.startsWith('done') || status == 'notListening') {
+    if (status == 'notListening') {
       _startupWatchdog?.cancel();
+      _recognitionSessionWatchdog?.cancel();
+      _setSpeechState(
+        ConversationSpeechState.finalizing,
+        sessionId,
+        'capture_ended_waiting_for_results',
+      );
+      _setPhase(ConversationAssistPhase.finalizing);
+      // Wait beyond the adapter's two-second final-result timeout. Stopping
+      // capture is not completion: network results may still be in flight.
+      _armFinalStatusWatchdog(
+        sessionId,
+        duration: _lastResultWasFinal
+            ? finalStatusWatchdogDuration
+            : finalResultWaitDuration,
+      );
+      return;
+    }
+    if (status.startsWith('done')) {
+      _startupWatchdog?.cancel();
+      _recognitionSessionWatchdog?.cancel();
       _finalStatusWatchdog?.cancel();
-      unawaited(_completeSpeechSession(sessionId, _transcript));
+      unawaited(_scheduleSpeechSessionCompletion(sessionId, _transcript));
     }
   }
 
@@ -1671,16 +1800,31 @@ class ConversationAssistController extends ChangeNotifier {
     int? platformCode,
   }) {
     if (_activeSessionId != sessionId) return;
-    final wasEstablishedTurn =
-        _speechState != ConversationSpeechState.starting;
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
+    if (_speechState == ConversationSpeechState.finalizing &&
+        _lastResultWasFinal &&
+        _transcript.trim().isNotEmpty) {
+      _nativeRecognitionStatus = 'ERROR_AFTER_FINAL';
+      logger.event(
+        sessionId: sessionId,
+        state: 'FINALIZING',
+        event: 'error_after_final_treated_as_terminal',
+        details: <String, Object?>{
+          'message': message,
+          'platformCode': platformCode,
+        },
+      );
+      unawaited(_scheduleSpeechSessionCompletion(sessionId, _transcript));
+      return;
+    }
     _activeSessionId = null;
     _nativeRecognitionStatus = 'ERROR';
     final normalized = message.toLowerCase();
     _errorMessage = message;
-    final permission = normalized.contains('permission') ||
-        normalized.contains('notallowed');
+    final permission =
+        normalized.contains('permission') || normalized.contains('notallowed');
     final recoverablePlatformError =
         !permission && platformCode != 12 && platformCode != 13;
     logger.event(
@@ -1711,13 +1855,23 @@ class ConversationAssistController extends ChangeNotifier {
       phase: permission
           ? ConversationAssistPhase.permissionDenied
           : ConversationAssistPhase.error,
-      automaticallyRearm: recoverablePlatformError && wasEstablishedTurn,
+      automaticallyRearm: recoverablePlatformError,
     );
   }
 
   Future<bool> _speakPrimarySuggestion(int turnId, int sessionId) async {
     final speech = _speechController;
     final suggestions = _result?.suggestions;
+    final activeTtsTurn = _autoTtsTurnId;
+    if (activeTtsTurn != null) {
+      logger.turn(
+        turnId: turnId,
+        state: _speechState.name.toUpperCase(),
+        event: 'duplicate_tts_ignored',
+        details: <String, Object?>{'activeTtsTurn': activeTtsTurn},
+      );
+      return false;
+    }
     if (!_isCurrentTurn(turnId)) {
       logger.turn(
         turnId: turnId,
@@ -1847,19 +2001,23 @@ class ConversationAssistController extends ChangeNotifier {
     }
     try {
       if (useKorean) {
-        await speech.toggleKorean(
-          lineId: line.id,
-          koreanText: visibleText,
-          rate: _speechRate,
-          turnId: turnId,
-        ).timeout(ttsPlaybackTimeout);
+        await speech
+            .toggleKorean(
+              lineId: line.id,
+              koreanText: visibleText,
+              rate: _speechRate,
+              turnId: turnId,
+            )
+            .timeout(ttsPlaybackTimeout);
       } else {
-        await speech.toggleJapanese(
-          lineId: line.id,
-          japaneseText: visibleText,
-          rate: _speechRate,
-          turnId: turnId,
-        ).timeout(ttsPlaybackTimeout);
+        await speech
+            .toggleJapanese(
+              lineId: line.id,
+              japaneseText: visibleText,
+              rate: _speechRate,
+              turnId: turnId,
+            )
+            .timeout(ttsPlaybackTimeout);
       }
       final playbackError = speech.lastError;
       if (playbackError != null) {
@@ -2053,8 +2211,14 @@ class ConversationAssistController extends ChangeNotifier {
     );
     _setPhase(ConversationAssistPhase.resuming);
 
-    for (var attempt = 1; attempt <= 2; attempt++) {
-      final delay = attempt == 1 ? audioReleaseDelay : rearmRetryDelay;
+    var attempt = 0;
+    while (!_closed &&
+        _listenModeEnabled &&
+        _isCurrentTurn(turnId) &&
+        generation == _rearmGeneration) {
+      attempt++;
+      final delay =
+          attempt == 1 ? audioReleaseDelay : _boundedRecoveryDelay(attempt - 1);
       if (delay > Duration.zero) {
         logger.turn(
           turnId: turnId,
@@ -2085,8 +2249,7 @@ class ConversationAssistController extends ChangeNotifier {
         event: 'armNextConversationTurn',
         details: <String, Object?>{'attempt': attempt},
       );
-      final started =
-          await _beginRecognitionSession(resumedFromTurnId: turnId);
+      final started = await _beginRecognitionSession(resumedFromTurnId: turnId);
       if (started) {
         logger.turn(
           turnId: turnId,
@@ -2100,16 +2263,24 @@ class ConversationAssistController extends ChangeNotifier {
         );
         return;
       }
+      if (!_lastStartFailureRetryable) {
+        logger.turn(
+          turnId: turnId,
+          state: 'ERROR',
+          event: 'rearm_failed_non_retryable',
+          details: <String, Object?>{'attempt': attempt},
+        );
+        _listenModeEnabled = false;
+        _setSpeechState(
+          ConversationSpeechState.idle,
+          0,
+          'non_retryable_rearm_returned_to_idle',
+          notify: false,
+        );
+        notifyListeners();
+        return;
+      }
     }
-    logger.turn(
-      turnId: turnId,
-      state: 'ERROR',
-      event: 'rearm_failed_after_bounded_retry',
-      details: <String, Object?>{
-        'listenModeEnabled': _listenModeEnabled,
-        'attempts': 2,
-      },
-    );
   }
 
   Future<void> _waitForRearmDelay(Duration delay) {
@@ -2190,6 +2361,7 @@ class ConversationAssistController extends ChangeNotifier {
     _clearProcessingWatchdog(turnId);
     _pendingVariantResult = null;
     _pendingVariantTurnId = null;
+    _invalidateResponseGeneration('processing_timeout');
     _activeTurnId = ++_turnSequence;
     _errorMessage = "Couldn't generate a reply.";
     _setSpeechState(
@@ -2217,10 +2389,9 @@ class ConversationAssistController extends ChangeNotifier {
         !_isCurrentTurn(turnId)) {
       return;
     }
-    final previousIds = _result?.suggestions
-            .map((item) => item.line.id)
-            .toSet() ??
-        const <String>{};
+    final previousIds =
+        _result?.suggestions.map((item) => item.line.id).toSet() ??
+            const <String>{};
     _pendingVariantResult = null;
     _pendingVariantTurnId = null;
     _result = full;
@@ -2332,14 +2503,10 @@ class ConversationAssistController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (!_listenModeEnabled || !automaticallyRearm) return;
-    if (_consecutiveRecognitionRecoveries >= 1) {
-      logger.turn(
-        turnId: _activeTurnId,
-        state: 'ERROR',
-        event: 'recognition_recovery_exhausted',
-        details: const <String, Object?>{'attempts': 1},
-      );
+    if (!_listenModeEnabled) return;
+    if (!automaticallyRearm) {
+      _listenModeEnabled = false;
+      notifyListeners();
       return;
     }
     _consecutiveRecognitionRecoveries++;
@@ -2349,8 +2516,17 @@ class ConversationAssistController extends ChangeNotifier {
     unawaited(_resumeListening(
       recoveryTurnId,
       reason: 'recognition_error_recovery',
-      audioReleaseDelay: rearmRetryDelay,
+      audioReleaseDelay:
+          _boundedRecoveryDelay(_consecutiveRecognitionRecoveries),
     ));
+  }
+
+  Duration _boundedRecoveryDelay(int attempt) {
+    final exponent = (attempt - 1).clamp(0, 4);
+    final multiplier = 1 << exponent;
+    final milliseconds =
+        (rearmRetryDelay.inMilliseconds * multiplier).clamp(1, 2000);
+    return Duration(milliseconds: milliseconds);
   }
 
   void _armStartupWatchdog(int sessionId) {
@@ -2371,6 +2547,7 @@ class ConversationAssistController extends ChangeNotifier {
         },
       );
       final recoveryTurnId = _resumingFromTurnId ?? _activeTurnId;
+      _recognitionSessionWatchdog?.cancel();
       _activeSessionId = null;
       _nativeRecognitionStatus = 'STARTUP_STALLED';
       _errorMessage = 'Speech recognizer did not activate. Please try again.';
@@ -2386,20 +2563,12 @@ class ConversationAssistController extends ChangeNotifier {
       }
       unawaited(_cancelStalledSession(sessionId).then((_) async {
         if (!_listenModeEnabled || _closed) return;
-        if (_consecutiveRecognitionRecoveries >= 1) {
-          logger.turn(
-            turnId: recoveryTurnId,
-            state: 'ERROR',
-            event: 'startup_recovery_exhausted',
-            details: const <String, Object?>{'attempts': 1},
-          );
-          return;
-        }
         _consecutiveRecognitionRecoveries++;
         await _resumeListening(
           recoveryTurnId,
           reason: 'startup_watchdog_recovery',
-          audioReleaseDelay: rearmRetryDelay,
+          audioReleaseDelay:
+              _boundedRecoveryDelay(_consecutiveRecognitionRecoveries),
         );
       }));
       _setSpeechState(
@@ -2411,18 +2580,70 @@ class ConversationAssistController extends ChangeNotifier {
     });
   }
 
+  /// A provider may acknowledge `listening` and then never deliver audio,
+  /// results, an error, or a terminal status. Bound that native session so a
+  /// silent plugin failure cannot leave Listen Mode visibly on but inert.
+  void _armRecognitionSessionWatchdog(int sessionId) {
+    _recognitionSessionWatchdog?.cancel();
+    _recognitionSessionWatchdog = Timer(recognitionSessionTimeout, () {
+      if (_closed || !_listenModeEnabled || _activeSessionId != sessionId) {
+        return;
+      }
+      unawaited(_recoverStalledRecognitionSession(sessionId));
+    });
+  }
+
+  Future<void> _recoverStalledRecognitionSession(int sessionId) async {
+    if (_closed || _activeSessionId != sessionId) return;
+    final recoveryTurnId = _activeCaptureTurnId ?? ++_turnSequence;
+    _activeCaptureTurnId = null;
+    _activeTurnId = recoveryTurnId;
+    _activeSessionId = null;
+    _nativeRecognitionStatus = 'SESSION_TIMEOUT';
+    _errorMessage = 'No speech result was received. Listening is restarting.';
+    logger.event(
+      sessionId: sessionId,
+      state: 'ERROR',
+      event: 'recognition_session_timeout',
+      details: <String, Object?>{
+        'timeoutMs': recognitionSessionTimeout.inMilliseconds,
+      },
+    );
+    _setSpeechState(
+      ConversationSpeechState.error,
+      sessionId,
+      'recognition_session_stalled',
+    );
+    await _cancelStalledSession(sessionId);
+    if (_closed || !_listenModeEnabled || !_isCurrentTurn(recoveryTurnId)) {
+      return;
+    }
+    _setSpeechState(
+      ConversationSpeechState.idle,
+      sessionId,
+      'stalled_session_audio_released',
+      notify: false,
+    );
+    _consecutiveRecognitionRecoveries++;
+    await _resumeListening(
+      recoveryTurnId,
+      reason: 'recognition_session_timeout_recovery',
+      audioReleaseDelay:
+          _boundedRecoveryDelay(_consecutiveRecognitionRecoveries),
+    );
+  }
+
   /// A native final transcript normally arrives immediately before the
   /// recognizer's terminal status. Some Android recognizers omit that last
   /// callback, which used to leave visible text stuck in FINALIZING forever.
-  /// Give the normal callback the rest of this event-loop turn, then explicitly
-  /// release the microphone. Response generation still starts only after the
-  /// recognizer has relinquished audio ownership.
-  void _armFinalStatusWatchdog(int sessionId) {
+  /// Give the normal callback a short grace period, then explicitly release the
+  /// microphone. Response generation still starts only after the recognizer has
+  /// relinquished audio ownership.
+  void _armFinalStatusWatchdog(int sessionId, {Duration? duration}) {
     _finalStatusWatchdog?.cancel();
-    _finalStatusWatchdog = Timer(finalStatusWatchdogDuration, () {
+    _finalStatusWatchdog = Timer(duration ?? finalStatusWatchdogDuration, () {
       if (_closed ||
-          _activeSessionId != sessionId ||
-          _speechState != ConversationSpeechState.finalizing) {
+          _activeSessionId != sessionId) {
         return;
       }
       logger.event(
@@ -2451,7 +2672,7 @@ class ConversationAssistController extends ChangeNotifier {
           .cancel(sessionId: sessionId)
           .timeout(const Duration(seconds: 2));
       if (_activeSessionId == sessionId && !_closed) {
-        await _completeSpeechSession(sessionId, _transcript);
+        await _scheduleSpeechSessionCompletion(sessionId, _transcript);
       }
     } on Object catch (error) {
       if (_activeSessionId != sessionId || _closed) return;
@@ -2462,13 +2683,13 @@ class ConversationAssistController extends ChangeNotifier {
         event: 'finalized_session_release_failed',
         details: <String, Object?>{'message': error},
       );
-      _activeSessionId = null;
-      _recoverFromRecognitionError(
-        sessionId,
-        event: 'finalized_session_release_error',
-        phase: ConversationAssistPhase.error,
-        automaticallyRearm: false,
-      );
+      // A stalled stop must not turn persistent listening off or throw away
+      // words we already received. Cancel invalidates adapter ownership even
+      // when its native future stalls, then finish this turn normally.
+      await _cancelStalledSession(sessionId);
+      if (_activeSessionId == sessionId && !_closed) {
+        await _scheduleSpeechSessionCompletion(sessionId, _transcript);
+      }
     }
   }
 
@@ -2544,6 +2765,7 @@ class ConversationAssistController extends ChangeNotifier {
   @override
   void dispose() {
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
     _processingWatchdog?.cancel();
     _speechController?.removeListener(_onSpeechStateChanged);
@@ -2557,10 +2779,12 @@ class ConversationAssistController extends ChangeNotifier {
     _closed = true;
     _cancelPendingRearm('controller_closed');
     _startupWatchdog?.cancel();
+    _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
     _processingWatchdog?.cancel();
     _listenModeEnabled = false;
     _activeSessionId = null;
+    _invalidateResponseGeneration('controller_closed');
     _speechController?.removeListener(_onSpeechStateChanged);
     _speechController?.setPlaybackGuard(null);
     final cleanup = _recognitionCleanup;

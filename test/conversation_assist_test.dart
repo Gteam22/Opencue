@@ -2,26 +2,16 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opencue/data/seed/conversation_seed_loader.dart';
+import 'package:opencue/domain/conversation/conversation_interpreter.dart';
+import 'package:opencue/domain/conversation/conversation_speech_log.dart';
+import 'package:opencue/domain/conversation/conversation.dart';
 import 'package:opencue/domain/enums/enums.dart';
 import 'package:opencue/domain/models/app_settings.dart';
 import 'package:opencue/domain/models/opener_line.dart';
 import 'package:opencue/domain/speech/speech_controller.dart';
 import 'package:opencue/domain/speech/speech_service.dart';
 
-import '../lib/domain/conversation/conversation_assist_controller.dart';
-import '../lib/domain/conversation/conversation_intent_catalog.dart';
-import '../lib/domain/conversation/conversation_intent_matcher.dart';
-import '../lib/domain/conversation/conversation_interpreter.dart';
-import '../lib/domain/conversation/conversation_models.dart';
-import '../lib/domain/conversation/conversation_recognition_service.dart';
-import '../lib/domain/conversation/conversation_response_engine.dart';
-import '../lib/domain/conversation/conversation_speech_log.dart';
-import '../lib/domain/conversation/language_detector.dart';
-import '../lib/domain/conversation/semantic_intent_classifier.dart';
-import '../lib/domain/conversation/voice_activity_tracker.dart';
-
-class FakeSemanticClassifier
-    implements ConversationSemanticIntentClassifier {
+class FakeSemanticClassifier implements ConversationSemanticIntentClassifier {
   const FakeSemanticClassifier(this.intentId, this.confidence);
 
   final String intentId;
@@ -39,6 +29,76 @@ class FakeSemanticClassifier
 }
 
 void main() {
+  test('capture end preserves delayed final words across consecutive turns',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const ConversationSeedLoader().load(),
+      preferences: const ConversationPreferences(),
+    );
+
+    for (final text in <String>['Where are you from?', 'What do you do?']) {
+      final sessionId = recognition.currentSessionId!;
+      recognition.result('What', false, 0.5);
+      recognition.status('notListening');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(controller.activeRecognitionSessionId, sessionId);
+      expect(controller.history.length, recognition.startCount - 1);
+
+      recognition.result(text, true, 0.95, sessionId: sessionId);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(controller.history.first.transcript, text);
+      expect(controller.result?.suggestions, isNotEmpty);
+      expect(controller.listenModeActive, isTrue);
+      expect(controller.activeRecognitionSessionId, isNot(sessionId));
+      expect(controller.isListening, isTrue);
+    }
+    expect(recognition.startCount, 3);
+    expect(controller.history.length, 2);
+  });
+
+  test('capture end without final callbacks salvages partial and rearms',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      finalResultWaitDuration: const Duration(milliseconds: 10),
+    );
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.result('Where are you from?', false, 0.95);
+    recognition.status('notListening');
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(controller.history.single.transcript, 'Where are you from?');
+    expect(recognition.startCount, 2);
+    expect(controller.listenModeActive, isTrue);
+  });
+
+  test('Stop during final result wait prevents replies and restart', () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      finalResultWaitDuration: const Duration(milliseconds: 10),
+    );
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.status('notListening');
+    await controller.stop();
+    recognition.result('Where are you from?', true, 0.95, sessionId: 1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(controller.history, isEmpty);
+    expect(controller.listenModeActive, isFalse);
+    expect(recognition.startCount, 1);
+  });
+
   test('adult assist opt-in is off by default and persists explicitly', () {
     expect(AppSettings.defaults.conversationAssistAdultContentEnabled, isFalse);
     final enabled = AppSettings.defaults.copyWith(
@@ -109,11 +169,9 @@ void main() {
     });
 
     test('recognizes relationship, teasing, availability and invitation', () {
-      expect(matcher.match('彼女いるの？').first.id,
-          'relationship_status');
+      expect(matcher.match('彼女いるの？').first.id, 'relationship_status');
       expect(matcher.match('モテそう').first.id, 'tease_popular');
-      expect(matcher.match('今週末何してる？').first.id,
-          'ask_weekend_plans');
+      expect(matcher.match('今週末何してる？').first.id, 'ask_weekend_plans');
       expect(matcher.match('また飲もう').first.id, 'invite_drink_again');
     });
 
@@ -322,8 +380,8 @@ void main() {
         preferences: const ConversationPreferences(),
       );
       expect(first, isTrue);
-      expect(controller.result!.interpretation.primaryIntentId,
-          'time_in_japan');
+      expect(
+          controller.result!.interpretation.primaryIntentId, 'time_in_japan');
       expect(controller.result!.suggestions, isNotEmpty);
 
       final second = await controller.onUtteranceFinalized(
@@ -332,13 +390,12 @@ void main() {
         preferences: const ConversationPreferences(),
       );
       expect(second, isTrue);
-      expect(controller.result!.interpretation.primaryIntentId,
-          'time_in_japan');
+      expect(
+          controller.result!.interpretation.primaryIntentId, 'time_in_japan');
       expect(controller.cueRevision, 2);
     });
 
-    test('relationship variants select relationship response family',
-        () async {
+    test('relationship variants select relationship response family', () async {
       final controller = ConversationAssistController(
         recognition: const NullConversationRecognitionService(),
       );
@@ -352,16 +409,16 @@ void main() {
       );
       expect(controller.result!.interpretation.primaryIntentId,
           'relationship_status');
-      expect(controller.result!.suggestions.first.line.id,
-          'relationship-reply');
+      expect(
+          controller.result!.suggestions.first.line.id, 'relationship-reply');
 
       await controller.onUtteranceFinalized(
         '今フリー？',
         library: library,
         preferences: const ConversationPreferences(),
       );
-      expect(controller.result!.interpretation.primaryIntentId,
-          'single_status');
+      expect(
+          controller.result!.interpretation.primaryIntentId, 'single_status');
     });
 
     test('installed library contains speakable relationship replies', () {
@@ -402,8 +459,8 @@ void main() {
       expect(controller.result, same(previous));
       expect(controller.cueRevision, revision);
       expect(controller.diagnostics!.intentId, 'no_action');
-      expect(controller.diagnostics!.action,
-          CueUpdateAction.preservedIrrelevant);
+      expect(
+          controller.diagnostics!.action, CueUpdateAction.preservedIrrelevant);
     });
 
     test('duplicate final results update cues only once', () async {
@@ -425,8 +482,8 @@ void main() {
       );
       expect(duplicate, isFalse);
       expect(controller.cueRevision, firstRevision);
-      expect(controller.diagnostics!.action,
-          CueUpdateAction.preservedDuplicate);
+      expect(
+          controller.diagnostics!.action, CueUpdateAction.preservedDuplicate);
     });
 
     test('manual submission uses the finalized utterance pipeline', () async {
@@ -440,10 +497,9 @@ void main() {
         preferences: const ConversationPreferences(),
         source: FinalizedUtteranceSource.manual,
       );
-      expect(controller.result!.interpretation.primaryIntentId,
-          'single_status');
-      expect(controller.diagnostics!.source,
-          FinalizedUtteranceSource.manual);
+      expect(
+          controller.result!.interpretation.primaryIntentId, 'single_status');
+      expect(controller.diagnostics!.source, FinalizedUtteranceSource.manual);
       expect(controller.diagnostics!.action, CueUpdateAction.updated);
       expect(controller.diagnostics!.matcherReasons, isNotEmpty);
       expect(controller.diagnostics!.responseHints, contains('single_status'));
@@ -466,8 +522,7 @@ void main() {
       );
       expect(controller.result!.interpretation.primaryIntentId,
           'relationship_status');
-      expect(controller.diagnostics!.matcher,
-          ConversationMatcherKind.semantic);
+      expect(controller.diagnostics!.matcher, ConversationMatcherKind.semantic);
     });
 
     test('partial STT updates call the response engine only after finalization',
@@ -579,45 +634,44 @@ void main() {
   });
 
   test('final transcript survives a missing terminal status', () async {
-      final recognition = FakeConversationRecognitionService();
-      final speechService = ControlledSpeechService();
-      final speech = SpeechController(speechService);
-      addTearDown(speech.dispose);
-      final controller = ConversationAssistController(
-        recognition: recognition,
-        finalStatusWatchdogDuration: Duration.zero,
-        postTtsAudioReleaseDelay: Duration.zero,
-        automaticRearmEnabled: false,
-      );
-      addTearDown(controller.dispose);
-      final reply = OpenerLine(
-        id: 'missing-terminal-reply',
-        japaneseText: '今はいないですよ。🙂',
-        topics: const <String>{'relationship_status'},
-      );
-      await controller.start(
-        library: <OpenerLine>[reply],
-        preferences: const ConversationPreferences(),
-        speechController: speech,
-        autoSpeak: true,
-      );
+    final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService();
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      finalStatusWatchdogDuration: Duration.zero,
+      postTtsAudioReleaseDelay: Duration.zero,
+      automaticRearmEnabled: false,
+    );
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'missing-terminal-reply',
+      japaneseText: '今はいないですよ。🙂',
+      topics: const <String>{'relationship_status'},
+    );
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
 
-      recognition.resultWithoutTerminal('彼女いますか？', 0.9);
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+    recognition.resultWithoutTerminal('彼女いますか？', 0.9);
+    await Future<void>.delayed(const Duration(milliseconds: 40));
 
-      expect(recognition.stopCount, 1);
-      expect(controller.result, isNotNull);
-      expect(controller.result!.suggestions.first.line.id, reply.id);
-      expect(speechService.spoken, <String>['今はいないですよ。']);
-      expect(controller.listenModeActive, isFalse);
-      expect(recognition.startCount, 1);
+    expect(recognition.stopCount, 1);
+    expect(controller.result, isNotNull);
+    expect(controller.result!.suggestions.first.line.id, reply.id);
+    expect(speechService.spoken, <String>['今はいないですよ。']);
+    expect(controller.listenModeActive, isFalse);
+    expect(recognition.startCount, 1);
   });
 
   test('FU one-shot exchanges can be tapped repeatedly and always speak',
       () async {
     final recognition = FakeConversationRecognitionService();
-    final speechService = ControlledSpeechService()
-      ..languageAvailable = false;
+    final speechService = ControlledSpeechService()..languageAvailable = false;
     final speech = SpeechController(speechService);
     addTearDown(speech.dispose);
     final controller = ConversationAssistController(
@@ -722,8 +776,7 @@ void main() {
     expect(recognition.cancelCount, 1);
   });
 
-  test('imperfect Korean cute transcript still produces a response',
-      () async {
+  test('imperfect Korean cute transcript still produces a response', () async {
     final controller = ConversationAssistController(
       recognition: const NullConversationRecognitionService(),
     );
@@ -817,8 +870,7 @@ void main() {
     expect(recognition.disposeCount, 1);
   });
 
-  test('Waiting for speech appears only after native audio activity',
-      () async {
+  test('Waiting for speech appears only after native audio activity', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
     addTearDown(controller.dispose);
@@ -840,7 +892,7 @@ void main() {
     expect(controller.phase, ConversationAssistPhase.capturingUtterance);
   });
 
-  test('startup watchdog cancels a recognizer with no native audio progress',
+  test('accepted listening status does not false-timeout without RMS callbacks',
       () async {
     final recognition = FakeConversationRecognitionService();
     final logs = <String>[];
@@ -856,17 +908,16 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 35));
 
-    expect(controller.speechState, ConversationSpeechState.idle);
-    expect(controller.phase, ConversationAssistPhase.error);
-    expect(recognition.cancelCount, 1);
+    expect(controller.speechState, ConversationSpeechState.starting);
+    expect(controller.phase, ConversationAssistPhase.starting);
+    expect(recognition.cancelCount, 0);
     expect(
       logs.any((line) => line.contains('SPEECH_RECOGNIZER_STALLED')),
-      isTrue,
+      isFalse,
     );
   });
 
-  test('Stop immediately cancels STARTING, READY, and SPEECH states',
-      () async {
+  test('Stop immediately cancels STARTING, READY, and SPEECH states', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
     addTearDown(controller.dispose);
@@ -966,8 +1017,7 @@ void main() {
     expect(controller.activeRecognitionSessionId, 2);
   });
 
-  test('late Android error_client from cancel is ignored after Stop',
-      () async {
+  test('late Android error_client from cancel is ignored after Stop', () async {
     final recognition = FakeConversationRecognitionService()
       ..errorClientOnCancel = true;
     final controller = ConversationAssistController(recognition: recognition);
@@ -991,7 +1041,7 @@ void main() {
     expect(recognition.cancelCount, 1);
   });
 
-  test('a spontaneous Android error_client never auto-retries', () async {
+  test('a spontaneous Android error_client automatically recovers', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
     addTearDown(controller.dispose);
@@ -1000,15 +1050,14 @@ void main() {
       preferences: const ConversationPreferences(),
     );
     recognition.error('error_client', permanent: true);
-    expect(controller.listenModeActive, isTrue);
     expect(controller.errorMessage, 'error_client');
     await Future<void>.delayed(const Duration(milliseconds: 450));
-    expect(recognition.startCount, 1);
-    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(recognition.startCount, 2);
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.speechState, ConversationSpeechState.starting);
   });
 
-  test('Android error_busy returns to idle without a hidden retry',
-      () async {
+  test('Android error_busy releases the failed session and rearms', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
     addTearDown(controller.dispose);
@@ -1019,13 +1068,13 @@ void main() {
     recognition.error('error_busy', permanent: true);
     recognition.status('notListening');
     await Future<void>.delayed(const Duration(milliseconds: 900));
-    expect(recognition.startCount, 1);
+    expect(recognition.startCount, 2);
     expect(controller.listenModeActive, isTrue);
-    expect(controller.errorMessage, 'error_busy');
-    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(controller.errorMessage, isNull);
+    expect(controller.speechState, ConversationSpeechState.starting);
   });
 
-  test('Android network errors return to idle without mode switching',
+  test('Android network errors automatically recover without mode switching',
       () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
@@ -1037,14 +1086,13 @@ void main() {
     recognition.error('error_network', permanent: false, platformCode: 2);
     recognition.status('notListening');
     await Future<void>.delayed(const Duration(milliseconds: 1100));
-    expect(recognition.startCount, 1);
+    expect(recognition.startCount, 2);
     expect(controller.listenModeActive, isTrue);
-    expect(controller.errorMessage, 'error_network');
-    expect(controller.speechState, ConversationSpeechState.idle);
+    expect(controller.errorMessage, isNull);
+    expect(controller.speechState, ConversationSpeechState.starting);
   });
 
-  test('an established turn recovers once from Android error_busy',
-      () async {
+  test('an established turn recovers once from Android error_busy', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(
       recognition: recognition,
@@ -1064,8 +1112,7 @@ void main() {
     expect(controller.speechState, ConversationSpeechState.starting);
   });
 
-  test('no-match and permission errors are terminal and manually retryable',
-      () async {
+  test('no-match recovers while permission errors stop Listen Mode', () async {
     final recognition = FakeConversationRecognitionService();
     final controller = ConversationAssistController(recognition: recognition);
     addTearDown(controller.dispose);
@@ -1074,8 +1121,9 @@ void main() {
       preferences: const ConversationPreferences(),
     );
     recognition.error('error_no_match', permanent: false, platformCode: 7);
-    expect(controller.speechState, ConversationSpeechState.idle);
-    expect(recognition.startCount, 1);
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    expect(controller.speechState, ConversationSpeechState.starting);
+    expect(recognition.startCount, 2);
 
     await controller.stop();
     await controller.start(
@@ -1089,7 +1137,120 @@ void main() {
     );
     expect(controller.phase, ConversationAssistPhase.permissionDenied);
     expect(controller.speechState, ConversationSpeechState.idle);
+    expect(controller.listenModeActive, isFalse);
+    expect(recognition.startCount, 3);
+  });
+
+  test('a silent native session is cancelled and automatically rearmed',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      recognitionSessionTimeout: const Duration(milliseconds: 5),
+      rearmRetryDelay: const Duration(milliseconds: 1),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    expect(recognition.cancelCount, greaterThanOrEqualTo(1));
+    expect(recognition.startCount, greaterThanOrEqualTo(2));
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.speechState, ConversationSpeechState.starting);
+  });
+
+  test('background releases audio and foreground restores Listen Mode',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.sound(0);
+    await controller.suspendForAppLifecycle();
+
+    expect(recognition.cancelCount, 1);
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.activeRecognitionSessionId, isNull);
+
+    await controller.resumeAfterAppLifecycle();
     expect(recognition.startCount, 2);
+    expect(controller.listenModeActive, isTrue);
+    expect(controller.activeRecognitionSessionId, 2);
+  });
+
+  test('duplicate terminal callbacks cannot start duplicate response or TTS',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService();
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      postTtsAudioReleaseDelay: Duration.zero,
+    );
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'single-generation-reply',
+      japaneseText: '今はいないですよ。',
+      topics: const <String>{'relationship_status'},
+    );
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
+
+    recognition.resultWithoutTerminal('彼女いますか？', 0.9);
+    recognition.status('done');
+    recognition.status('done');
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    expect(controller.cueRevision, 1);
+    expect(speechService.spoken, hasLength(1));
+    expect(recognition.startCount, 2);
+  });
+
+  test('an error after a final transcript still generates and speaks a reply',
+      () async {
+    final recognition = FakeConversationRecognitionService();
+    final speechService = ControlledSpeechService();
+    final speech = SpeechController(speechService);
+    addTearDown(speech.dispose);
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      finalStatusWatchdogDuration: const Duration(seconds: 1),
+      postTtsAudioReleaseDelay: Duration.zero,
+    );
+    addTearDown(controller.dispose);
+    final reply = OpenerLine(
+      id: 'error-after-final-reply',
+      japaneseText: '今はいないですよ。',
+      topics: const <String>{'relationship_status'},
+    );
+    await controller.start(
+      library: <OpenerLine>[reply],
+      preferences: const ConversationPreferences(),
+      speechController: speech,
+      autoSpeak: true,
+    );
+
+    recognition.resultWithoutTerminal('彼女いますか？', 0.9);
+    recognition.error('error_client', permanent: true, platformCode: 5);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    expect(controller.result, isNotNull);
+    expect(speechService.spoken, <String>['今はいないですよ。']);
+    expect(recognition.startCount, 2);
+    expect(controller.listenModeActive, isTrue);
   });
 
   test('Auto Speak suppresses self-voice and resumes recognition', () async {
@@ -1375,8 +1536,7 @@ void main() {
     expect(recognition.startCount, 4);
   });
 
-  test('10 consecutive primary TTS turns each speak once and resume',
-      () async {
+  test('10 consecutive primary TTS turns each speak once and resume', () async {
     final recognition = FakeConversationRecognitionService();
     final speechService = ControlledSpeechService();
     final speech = SpeechController(speechService);
@@ -1401,9 +1561,27 @@ void main() {
       autoSpeak: true,
     );
 
-    for (var turn = 0; turn < 10; turn++) {
-      recognition.result('彼女はいますか？ turn $turn', true, 0.9);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+    const utterances = <String>[
+      '彼女いますか？',
+      '彼女いるの？',
+      '恋人いますか？',
+      '付き合ってる人いますか？',
+      'パートナーはいますか？',
+      '今、彼女いますか？',
+      '今、彼女いるの？',
+      '今、恋人いますか？',
+      '今、付き合ってる人いますか？',
+      '今、パートナーはいますか？',
+    ];
+    for (var turn = 0; turn < utterances.length; turn++) {
+      recognition.result(utterances[turn], true, 0.9);
+      for (var poll = 0;
+          poll < 100 &&
+              (speechService.spoken.length < turn + 1 ||
+                  recognition.startCount < turn + 2);
+          poll++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
       expect(speechService.spoken, hasLength(turn + 1));
       expect(recognition.startCount, turn + 2);
       expect(controller.listenModeActive, isTrue);
@@ -1459,8 +1637,7 @@ void main() {
     );
   });
 
-  test('Korean output mode Auto Speaks Hangul and resumes listening',
-      () async {
+  test('Korean output mode Auto Speaks Hangul and resumes listening', () async {
     final recognition = FakeConversationRecognitionService();
     final logs = <String>[];
     final speechService = ControlledSpeechService();
@@ -1696,8 +1873,7 @@ void main() {
     );
     expect(updated, isTrue);
     expect(controller.activeIntentId, 'time_in_japan');
-    expect(controller.diagnostics!.matcher,
-        ConversationMatcherKind.contextual);
+    expect(controller.diagnostics!.matcher, ConversationMatcherKind.contextual);
   });
 
   test('a stale semantic result cannot overwrite a newer turn', () async {

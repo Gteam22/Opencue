@@ -9,10 +9,10 @@ file to mention the current version.
 
 ### Added
 
-- **Restored the reliable FU one-shot Conversation Assist exchange.** Each
-  Listen tap owns exactly one recognizer turn: listen, finalize, generate
-  relevant Standard / Humorous / Flirty responses, optionally speak the primary
-  response, release audio ownership and return to idle for the next tap.
+- **Restored the FU2 continuous Conversation Assist exchange.** One Listen tap
+  enables foreground Listen Mode; each isolated recognizer turn finalizes,
+  generates relevant Standard / Humorous / Flirty responses, optionally speaks
+  the primary response, releases audio ownership, and automatically rearms.
   Automatic input no longer inherits the output language, accepted native
   `listening` status no longer times out merely because RMS callbacks are absent,
   and a final transcript explicitly releases a recognizer whose terminal status
@@ -20,8 +20,11 @@ file to mention the current version.
   probe gives a false negative, and fresh TTS no longer begins with a redundant
   cancellation. Native recognition start/cancel and forced TTS stop calls are
   now bounded so a plugin Future cannot permanently lock the Listen control;
-  stale native listeners are cleaned before a new turn, and the one-shot path
-  observes a short post-TTS audio-release interval. Current language support,
+  stale native listeners are cleaned before a new turn, and every TTS turn
+  observes a short post-playback audio-release interval. Transient recognition
+  errors and silent native stalls now recover with guarded backoff, while app
+  backgrounding releases audio and foregrounding restores an active Listen Mode
+  session. Current language support,
   response libraries, context, UI and stored data are unchanged. TTS continues
   to omit emoji from spoken text.
 - **Radial context menu.** A gesture-driven, three-layer menu for building or

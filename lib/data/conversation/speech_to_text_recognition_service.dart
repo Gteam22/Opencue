@@ -134,15 +134,14 @@ class SpeechToTextRecognitionService
         onResult: (result) => _onResult(sessionId, result),
         onSoundLevelChange: (level) => _onSoundLevel(sessionId, level),
         localeId: config.localeId,
-        // FU handled one conversational line per tap. Confirmation mode lets
-        // the platform close that short turn cleanly instead of holding a
-        // long dictation session open and sometimes losing its final status.
+        // Capture a conversational utterance, including natural pauses.
+        // The controller starts the next session after results are delivered.
         listenFor: const Duration(seconds: 30),
         pauseFor: const Duration(seconds: 2),
         partialResults: true,
         cancelOnError: true,
         onDevice: false,
-        listenMode: ListenMode.confirmation,
+        listenMode: ListenMode.dictation,
       );
       _logger.event(
         sessionId: sessionId,
@@ -305,7 +304,9 @@ class SpeechToTextRecognitionService
     final sessionId = _activeSessionId;
     if (sessionId == null) return;
     final locale = _activeLocale;
-    final terminal = status == 'done' || status == 'notListening';
+    // notListening only means capture stopped. The plugin can still deliver
+    // final words afterward; retain their session until done (or cancellation).
+    final terminal = status.startsWith('done');
     _logger.event(
       sessionId: sessionId,
       state: terminal ? 'PROCESSING' : 'STARTING',
