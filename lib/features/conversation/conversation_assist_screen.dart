@@ -179,6 +179,9 @@ class _ConversationAssistScreenState extends State<ConversationAssistScreen>
                 if (_controller.phase == ConversationAssistPhase.understanding)
                   const Center(child: CircularProgressIndicator()),
                 if (_controller.result != null)
+                  if (_controller.lastTurnUsedPartialTranscript)
+                    Text(strings.t('assist.partialReply')),
+                if (_controller.result != null)
                   _Suggestions(
                     result: _controller.result!,
                     onMore: _controller.more,

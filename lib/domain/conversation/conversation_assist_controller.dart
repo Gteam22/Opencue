@@ -145,6 +145,7 @@ class ConversationAssistController extends ChangeNotifier {
   DateTime? _resumeRequestedAt;
   int? _activeCaptureTurnId;
   bool _lastResultWasFinal = false;
+  bool _lastTurnUsedPartialTranscript = false;
   bool _listenButtonTransitionLocked = false;
   DateTime? _lastListenButtonEventAt;
   int _listenButtonTransitionSequence = 0;
@@ -189,11 +190,14 @@ class ConversationAssistController extends ChangeNotifier {
   bool get listenButtonTransitionLocked => _listenButtonTransitionLocked;
   bool get recognitionSuppressed => _suppressRecognition;
   bool get autoSpeak => _autoSpeak;
+  bool get lastTurnUsedPartialTranscript => _lastTurnUsedPartialTranscript;
   String get microphoneOwner =>
       _activeSessionId == null ? 'none' : 'SpeechRecognizer';
   bool get audioInputActive =>
       _activeSessionId != null &&
-      _speechState != ConversationSpeechState.starting;
+      (_speechState == ConversationSpeechState.readyForSpeech ||
+          _speechState == ConversationSpeechState.speechDetected ||
+          _speechState == ConversationSpeechState.capturingUtterance);
   bool get voiceDetected => _activeCaptureTurnId != null;
   String get partialTranscript => _lastResultWasFinal ? '' : _transcript;
   String get finalTranscript => _lastResultWasFinal ? _transcript : '';
@@ -356,10 +360,18 @@ class ConversationAssistController extends ChangeNotifier {
     _listenModeEnabled = true;
     final started = await _beginRecognitionSession(resumedFromTurnId: null);
     if (!started && _listenModeEnabled) {
-      // The explicit Start command did not establish a session. This is not an
-      // end-of-turn transition; return the failed command to OFF.
-      _listenModeEnabled = false;
-      notifyListeners();
+      if (automaticRearmEnabled && _lastStartFailureRetryable) {
+        // Do not hold the button transition lock while retrying. Stop must
+        // remain available even if the native recognizer stays unavailable.
+        unawaited(_resumeListening(
+          _activeTurnId,
+          reason: 'initial_start_recovery',
+          audioReleaseDelay: rearmRetryDelay,
+        ));
+      } else {
+        _listenModeEnabled = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -437,12 +449,16 @@ class ConversationAssistController extends ChangeNotifier {
       notifyListeners();
       return true;
     } on Object catch (error) {
+      if (_activeSessionId != sessionId) return false;
       _startupWatchdog?.cancel();
       _recognitionSessionWatchdog?.cancel();
-      if (_activeSessionId != sessionId) return false;
       _activeSessionId = null;
-      _lastStartFailureRetryable = error is! UnsupportedError;
+      final permission = _isPermissionError('$error');
+      _lastStartFailureRetryable = error is! UnsupportedError && !permission;
       await _cancelStalledSession(sessionId);
+      if (_closed || !_listenModeEnabled || _activeSessionId != null) {
+        return false;
+      }
       _errorMessage = '$error';
       logger.event(
         sessionId: sessionId,
@@ -460,7 +476,9 @@ class ConversationAssistController extends ChangeNotifier {
         sessionId,
         'start_failed',
       );
-      _setPhase(ConversationAssistPhase.error);
+      _setPhase(permission
+          ? ConversationAssistPhase.permissionDenied
+          : ConversationAssistPhase.error);
       _setSpeechState(
         ConversationSpeechState.idle,
         sessionId,
@@ -982,6 +1000,7 @@ class ConversationAssistController extends ChangeNotifier {
             )
           : nextResult;
       _result = displayedResult;
+      _lastTurnUsedPartialTranscript = false;
       if (stageVariants) {
         _pendingVariantResult = nextResult;
         _pendingVariantTurnId = turnId;
@@ -1351,6 +1370,8 @@ class ConversationAssistController extends ChangeNotifier {
     _startupWatchdog?.cancel();
     _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
+    final usedPartialTranscript =
+        !_lastResultWasFinal && text.trim().isNotEmpty;
     _activeSessionId = null;
     _nativeRecognitionStatus = 'TERMINAL';
     final turnId = _activeCaptureTurnId ?? ++_turnSequence;
@@ -1473,6 +1494,7 @@ class ConversationAssistController extends ChangeNotifier {
       }
       _clearProcessingWatchdog(turnId);
       if (relevant) {
+        _lastTurnUsedPartialTranscript = usedPartialTranscript;
         _setSpeechState(
           ConversationSpeechState.primaryReady,
           sessionId,
@@ -1496,7 +1518,7 @@ class ConversationAssistController extends ChangeNotifier {
           'RESPONSE_GENERATION_FAILED',
         );
       }
-      if (relevant && _autoSpeak) {
+      if (relevant && _autoSpeak && !usedPartialTranscript) {
         var ttsCompleted = false;
         if (_ttsStartedTurns.add(turnId)) {
           logger.turn(
@@ -1803,30 +1825,26 @@ class ConversationAssistController extends ChangeNotifier {
     _startupWatchdog?.cancel();
     _recognitionSessionWatchdog?.cancel();
     _finalStatusWatchdog?.cancel();
-    if (_speechState == ConversationSpeechState.finalizing &&
-        _lastResultWasFinal &&
-        _transcript.trim().isNotEmpty) {
-      _nativeRecognitionStatus = 'ERROR_AFTER_FINAL';
+    final permission = platformCode == 9 || _isPermissionError(message);
+    final recoverablePlatformError =
+        !permission && platformCode != 12 && platformCode != 13;
+    if (recoverablePlatformError && _transcript.trim().isNotEmpty) {
+      _nativeRecognitionStatus = 'ERROR_WITH_TRANSCRIPT';
       logger.event(
         sessionId: sessionId,
         state: 'FINALIZING',
-        event: 'error_after_final_treated_as_terminal',
+        event: 'error_with_transcript_releasing_capture',
         details: <String, Object?>{
           'message': message,
           'platformCode': platformCode,
         },
       );
-      unawaited(_scheduleSpeechSessionCompletion(sessionId, _transcript));
+      unawaited(_releaseFinalizedRecognitionSession(sessionId));
       return;
     }
     _activeSessionId = null;
     _nativeRecognitionStatus = 'ERROR';
-    final normalized = message.toLowerCase();
     _errorMessage = message;
-    final permission =
-        normalized.contains('permission') || normalized.contains('notallowed');
-    final recoverablePlatformError =
-        !permission && platformCode != 12 && platformCode != 13;
     logger.event(
       sessionId: sessionId,
       state: 'ERROR',
@@ -1857,6 +1875,12 @@ class ConversationAssistController extends ChangeNotifier {
           : ConversationAssistPhase.error,
       automaticallyRearm: recoverablePlatformError,
     );
+  }
+
+  bool _isPermissionError(String message) {
+    final normalized = message.toLowerCase().replaceAll('_', '');
+    return normalized.contains('permission') ||
+        normalized.contains('notallowed');
   }
 
   Future<bool> _speakPrimarySuggestion(int turnId, int sessionId) async {
@@ -2595,6 +2619,10 @@ class ConversationAssistController extends ChangeNotifier {
 
   Future<void> _recoverStalledRecognitionSession(int sessionId) async {
     if (_closed || _activeSessionId != sessionId) return;
+    if (_transcript.trim().isNotEmpty) {
+      await _releaseFinalizedRecognitionSession(sessionId);
+      return;
+    }
     final recoveryTurnId = _activeCaptureTurnId ?? ++_turnSequence;
     _activeCaptureTurnId = null;
     _activeTurnId = recoveryTurnId;

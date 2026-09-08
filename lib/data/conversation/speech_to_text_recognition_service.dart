@@ -33,6 +33,8 @@ class SpeechToTextRecognitionService
   int? _activeSessionId;
   String? _activeLocale;
   Future<bool>? _initializeFuture;
+  Future<void>? _nativeCleanup;
+  int? _pendingStartSessionId;
 
   @override
   bool get isSupported => _available;
@@ -87,13 +89,30 @@ class SpeechToTextRecognitionService
     if (!_available || _callbacks == null) {
       throw StateError('Speech recognition is not available.');
     }
+    // A controller timeout does not cancel the native Future. Never overlap
+    // a new start with cancellation that is still executing in the plugin.
+    if (_pendingStartSessionId != null) {
+      throw StateError('Speech recognizer start is already pending.');
+    }
+    final cleanup = _nativeCleanup;
+    if (cleanup != null) {
+      _pendingStartSessionId = sessionId;
+      try {
+        await cleanup.timeout(const Duration(seconds: 2));
+        if (_pendingStartSessionId != sessionId) {
+          throw StateError('Speech recognition start was cancelled.');
+        }
+      } finally {
+        if (_pendingStartSessionId == sessionId) _pendingStartSessionId = null;
+      }
+    }
     if (_activeSessionId == null && _speech.isListening) {
       _logger.event(
         sessionId: sessionId,
         state: 'STARTING',
         event: 'stale_native_listener_cleanup',
       );
-      await _speech.cancel().timeout(const Duration(seconds: 2));
+      await _cancelNative().timeout(const Duration(seconds: 2));
     }
     if (_activeSessionId != null || _speech.isListening) {
       _logger.event(
@@ -399,6 +418,7 @@ class SpeechToTextRecognitionService
 
   @override
   Future<void> cancel({required int sessionId}) async {
+    if (_pendingStartSessionId == sessionId) _pendingStartSessionId = null;
     if (_activeSessionId != sessionId) return;
     final locale = _activeLocale;
     _logger.event(
@@ -414,11 +434,23 @@ class SpeechToTextRecognitionService
     // stalled cancel Future must not keep every later turn permanently busy.
     _activeSessionId = null;
     _activeLocale = null;
-    await _speech.cancel();
+    await _cancelNative();
+  }
+
+  Future<void> _cancelNative() {
+    final existing = _nativeCleanup;
+    if (existing != null) return existing;
+    late final Future<void> operation;
+    operation = _speech.cancel().whenComplete(() {
+      if (identical(_nativeCleanup, operation)) _nativeCleanup = null;
+    });
+    _nativeCleanup = operation;
+    return operation;
   }
 
   @override
   Future<void> dispose() async {
+    _pendingStartSessionId = null;
     final sessionId = _activeSessionId;
     final locale = _activeLocale;
     if (sessionId != null) await cancel(sessionId: sessionId);

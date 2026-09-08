@@ -29,6 +29,94 @@ class FakeSemanticClassifier implements ConversationSemanticIntentClassifier {
 }
 
 void main() {
+  testWidgets('initial busy failure retries and Stop cancels later retries',
+      (tester) async {
+    final recognition = FakeConversationRecognitionService()
+      ..failStartsRemaining = 1;
+    final controller = ConversationAssistController(
+      recognition: recognition,
+      rearmRetryDelay: const Duration(milliseconds: 10),
+    );
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    expect(controller.listenModeActive, isTrue);
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(recognition.startCount, 2);
+    await controller.stop();
+    recognition.failStartsRemaining = 10;
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    await controller.stop();
+    await tester.pump(const Duration(seconds: 1));
+    expect(recognition.startCount, 3);
+    expect(controller.listenModeActive, isFalse);
+  });
+
+  for (final failure in <String>['timeout', 'network']) {
+    testWidgets('partial words survive $failure and rearm without auto speech',
+        (tester) async {
+      final recognition = FakeConversationRecognitionService();
+      final speechService = ControlledSpeechService();
+      final speech = SpeechController(speechService);
+      addTearDown(speech.dispose);
+      final controller = ConversationAssistController(
+        recognition: recognition,
+        recognitionSessionTimeout: const Duration(seconds: 1),
+      );
+      addTearDown(controller.dispose);
+      await controller.start(
+        library: <OpenerLine>[
+          OpenerLine(
+            id: 'partial-reply',
+            japaneseText: '今はいないですよ。',
+            topics: const <String>{'relationship_status'},
+          ),
+        ],
+        preferences: const ConversationPreferences(),
+        speechController: speech,
+        autoSpeak: true,
+      );
+      recognition.result('彼女いますか？', false, 0.95);
+      if (failure == 'network') {
+        recognition.error('error_network', permanent: false, platformCode: 2);
+      } else {
+        await tester.pump(const Duration(seconds: 1));
+      }
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(controller.history.single.transcript, '彼女いますか？');
+      expect(controller.result?.suggestions, isNotEmpty);
+      expect(controller.lastTurnUsedPartialTranscript, isTrue);
+      expect(speechService.spoken, isEmpty);
+      expect(recognition.startCount, 2);
+      expect(controller.listenModeActive, isTrue);
+      await controller.stop();
+    });
+  }
+
+  testWidgets('permission error with partial words stops instead of retrying',
+      (tester) async {
+    final recognition = FakeConversationRecognitionService();
+    final controller = ConversationAssistController(recognition: recognition);
+    addTearDown(controller.dispose);
+    await controller.start(
+      library: const <OpenerLine>[],
+      preferences: const ConversationPreferences(),
+    );
+    recognition.result('Where are you from?', false, 0.95);
+    recognition.error('not_allowed', permanent: true, platformCode: 9);
+    await tester.pump(const Duration(seconds: 1));
+    expect(controller.listenModeActive, isFalse);
+    expect(controller.phase, ConversationAssistPhase.permissionDenied);
+    expect(controller.history, isEmpty);
+    expect(recognition.startCount, 1);
+  });
+
   test('capture end preserves delayed final words across consecutive turns',
       () async {
     final recognition = FakeConversationRecognitionService();

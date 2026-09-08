@@ -127,11 +127,13 @@ const Map<String, String> stringsEn = <String, String>{
   'assist.safeFallback':
       'The meaning was uncertain, so these are low-pressure fallback options.',
   'assist.sessionHistory': 'This session',
-  'assist.speaking': 'Speaking the primary response…',
+  'assist.speaking': 'Speaking reply. Listening resumes afterward.',
+  'assist.partialReply':
+      'Reply based on incomplete speech. Check it before using it.',
   'assist.primaryReady': 'Primary response ready.',
   'assist.resuming': 'Resuming listening…',
   'assist.capturingUtterance': 'Listening…',
-  'assist.finalizing': 'Finishing the utterance…',
+  'assist.finalizing': 'Finishing speech recognition. Please wait…',
   'assist.startListening': 'Start Listening',
   'assist.startingListener': 'Starting listener…',
   'assist.stop': 'Stop listening',
@@ -153,7 +155,7 @@ const Map<String, String> stringsEn = <String, String>{
       'You can also type or correct the conversation here.',
   'assist.unavailable':
       'Speech recognition is unavailable on this device. You can still type the transcript.',
-  'assist.understanding': 'Understanding the conversation…',
+  'assist.understanding': 'Preparing reply. Listening resumes afterward.',
   'assist.understoodAs': 'Understood: {0}',
   'assist.useEdited': 'Use edited transcript',
   'assist.waitingForSpeech': 'Waiting for speech…',
